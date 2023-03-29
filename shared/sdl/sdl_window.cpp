@@ -330,6 +330,7 @@ static rserr_t GLimp_SetMode(glconfig_t *glConfig, const windowDesc_t *windowDes
 	int display = 0;
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 
+	Com_Printf("grahpis mode: %d", (int)windowDesc->api);
 	switch (windowDesc->api)
 	{
 		case GRAPHICS_API_OPENGL:

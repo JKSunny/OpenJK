@@ -101,6 +101,29 @@ void G2Time_ReportTimers(void)
 
 //rww - RAGDOLL_END
 
+static const int MAX_RENDERABLE_SURFACES = 4096;
+static CRenderableSurface renderSurfHeap[MAX_RENDERABLE_SURFACES];
+static int currentRenderSurfIndex = 0;
+
+static CRenderableSurface *AllocGhoul2RenderableSurface( void )
+{
+	if ( currentRenderSurfIndex >= MAX_RENDERABLE_SURFACES )
+	{
+		ri.Error( ERR_DROP, "AllocRenderableSurface: Reached maximum number of Ghoul2 renderable surfaces (%d)", MAX_RENDERABLE_SURFACES );
+		return NULL;
+	}
+
+	CRenderableSurface *rs = &renderSurfHeap[currentRenderSurfIndex++];
+
+	rs->Init();
+
+	return rs;
+}
+
+void ResetGhoul2RenderableSurfaceHeap( void ) {
+	currentRenderSurfIndex = 0;
+}
+
 bool HackadelicOnClient=false; // means this is a render traversal
 
 qboolean G2_SetupModelPointers(CGhoul2Info *ghlInfo);
@@ -785,21 +808,6 @@ public:
 #endif
 	{}
 };
-
-#ifdef _G2_GORE
-#define MAX_RENDER_SURFACES (2048)
-static CRenderableSurface RSStorage[MAX_RENDER_SURFACES];
-static unsigned int NextRS=0;
-
-CRenderableSurface *AllocRS()
-{
-	CRenderableSurface *ret=&RSStorage[NextRS];
-	ret->Init();
-	NextRS++;
-	NextRS%=MAX_RENDER_SURFACES;
-	return ret;
-}
-#endif
 
 /*
 
@@ -2425,6 +2433,19 @@ void G2_ProcessGeneratedSurfaceBolts(CGhoul2Info &ghoul2, mdxaBone_v &bonePtr, m
 #endif
 }
 
+#ifdef USE_VBO_GHOUL2
+static inline void vk_set_ghoul2_vbo_mesh( const CRenderSurface &RS, CRenderableSurface *surf, const int lod, const int surfaceIndex )
+{
+	if ( !vk.vboGhoul2Active )
+		return;
+
+	surf->vboMesh = &RS.currentModel->vboModels[lod].vboMeshes[RS.surfaceNum];
+#ifdef _DEBUG
+	assert( surf->vboMesh != NULL && RS.surfaceNum == surfaceIndex );
+#endif
+}
+#endif
+
 void RenderSurfaces(CRenderSurface &RS) //also ended up just ripping right from SP.
 {
 #ifdef G2_PERFORMANCE_ANALYSIS
@@ -2484,50 +2505,14 @@ void RenderSurfaces(CRenderSurface &RS) //also ended up just ripping right from 
 			shader = R_GetShaderByHandle( surfInfo->shaderIndex );
 		}
 
-		//rww - catch surfaces with bad shaders
-		//assert(shader != tr.defaultShader);
-		//Alright, this is starting to annoy me because of the state of the assets. Disabling for now.
-		// we will add shadows even if the main object isn't visible in the view
-		// stencil shadows can't do personal models unless I polyhedron clip
-		//using z-fail now so can do personal models -rww
-		if ( /*!RS.personalModel
-			&& */r_shadows->integer == 2
-//			&& RS.fogNum == 0
-			&& (RS.renderfx & RF_SHADOW_PLANE )
-			&& !(RS.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ) )
-			&& shader->sort == SS_OPAQUE )
-		{		// set the surface info to point at the where the transformed bone list is going to be for when the surface gets rendered out
-			CRenderableSurface *newSurf = new CRenderableSurface;
-			if (surface->numVerts >= SHADER_MAX_VERTEXES/2)
-			{ //we need numVerts*2 xyz slots free in tess to do shadow, if this surf is going to exceed that then let's try the lowest lod -rww
-				mdxmSurface_t *lowsurface = (mdxmSurface_t *)G2_FindSurface(RS.currentModel, RS.surfaceNum, RS.currentModel->numLods-1);
-				newSurf->surfaceData = lowsurface;
-			}
-			else
-			{
-				newSurf->surfaceData = surface;
-			}
-			newSurf->boneCache = RS.boneCache;
-			R_AddDrawSurf( (surfaceType_t *)newSurf, tr.shadowShader, 0, qfalse );
-		}
-
-		// projection shadows work fine with personal models
-		if ( r_shadows->integer == 3
-//			&& RS.fogNum == 0
-			&& (RS.renderfx & RF_SHADOW_PLANE )
-			&& shader->sort == SS_OPAQUE )
-		{		// set the surface info to point at the where the transformed bone list is going to be for when the surface gets rendered out
-			CRenderableSurface *newSurf = new CRenderableSurface;
-			newSurf->surfaceData = surface;
-			newSurf->boneCache = RS.boneCache;
-			R_AddDrawSurf( (surfaceType_t *)newSurf, tr.projectionShadowShader, 0, qfalse );
-		}
-
 		// don't add third_person objects if not viewing through a portal
 		if ( !RS.personalModel )
 		{		// set the surface info to point at the where the transformed bone list is going to be for when the surface gets rendered out
-			CRenderableSurface *newSurf = new CRenderableSurface;
+			CRenderableSurface *newSurf = AllocGhoul2RenderableSurface();
 			newSurf->surfaceData = surface;
+#ifdef USE_VBO_GHOUL2
+			vk_set_ghoul2_vbo_mesh( RS, newSurf, RS.lod, surface->thisSurfaceIndex );
+#endif
 			newSurf->boneCache = RS.boneCache;
 			R_AddDrawSurf( (surfaceType_t *)newSurf, (shader_t *)shader, RS.fogNum, qfalse );
 			tr.needScreenMap |= shader->hasScreenMap;
@@ -2559,7 +2544,7 @@ void RenderSurfaces(CRenderSurface &RS) //also ended up just ripping right from 
 					}
 					else if (tex->tex[RS.lod])
 					{
-						CRenderableSurface *newSurf2 = AllocRS();
+						CRenderableSurface *newSurf2 = AllocGhoul2RenderableSurface();
 						*newSurf2=*newSurf;
 						newSurf2->goreChain=0;
 						newSurf2->alternateTex=tex->tex[RS.lod];
@@ -2616,6 +2601,55 @@ void RenderSurfaces(CRenderSurface &RS) //also ended up just ripping right from 
 			}
 #endif
 		}
+
+#ifdef USE_VBO_GHOUL2
+		// stencil/projection shadows are not supported with ghoul2 vbo enabled, yet
+		if( !vk.vboGhoul2Active ) {
+#endif
+		//rww - catch surfaces with bad shaders
+		//assert(shader != tr.defaultShader);
+		//Alright, this is starting to annoy me because of the state of the assets. Disabling for now.
+		// we will add shadows even if the main object isn't visible in the view
+		// stencil shadows can't do personal models unless I polyhedron clip
+		//using z-fail now so can do personal models -rww
+		if ( /*!RS.personalModel
+			&& */r_shadows->integer == 2
+//			&& RS.fogNum == 0
+			&& (RS.renderfx & RF_SHADOW_PLANE )
+			&& !(RS.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ) )
+			&& shader->sort == SS_OPAQUE )
+		{		// set the surface info to point at the where the transformed bone list is going to be for when the surface gets rendered out
+			CRenderableSurface *newSurf = AllocGhoul2RenderableSurface();
+			if (surface->numVerts >= SHADER_MAX_VERTEXES/2)
+			{ //we need numVerts*2 xyz slots free in tess to do shadow, if this surf is going to exceed that then let's try the lowest lod -rww
+				mdxmSurface_t *lowsurface = (mdxmSurface_t *)G2_FindSurface(RS.currentModel, RS.surfaceNum, RS.currentModel->numLods-1);
+				newSurf->surfaceData = lowsurface;
+				//vk_set_ghoul2_vbo_mesh( RS, newSurf, RS.currentModel->numLods-1, lowsurface->thisSurfaceIndex );
+			}
+			else
+			{
+				newSurf->surfaceData = surface;
+				//vk_set_ghoul2_vbo_mesh( RS, newSurf, RS.lod, surface->thisSurfaceIndex );
+			}
+			newSurf->boneCache = RS.boneCache;
+			R_AddDrawSurf( (surfaceType_t *)newSurf, tr.shadowShader, 0, qfalse );
+		}
+
+		// projection shadows work fine with personal models
+		if ( r_shadows->integer == 3
+//			&& RS.fogNum == 0
+			&& (RS.renderfx & RF_SHADOW_PLANE )
+			&& shader->sort == SS_OPAQUE )
+		{		// set the surface info to point at the where the transformed bone list is going to be for when the surface gets rendered out
+			CRenderableSurface *newSurf = AllocGhoul2RenderableSurface();
+			newSurf->surfaceData = surface;
+			//vk_set_ghoul2_vbo_mesh( RS, newSurf, RS.lod, surface->thisSurfaceIndex );
+			newSurf->boneCache = RS.boneCache;
+			R_AddDrawSurf( (surfaceType_t *)newSurf, tr.projectionShadowShader, 0, qfalse );
+		}
+#ifdef USE_VBO_GHOUL2
+		}
+#endif
 	}
 
 	// if we are turning off all descendants, then stop this recursion now
@@ -3495,7 +3529,53 @@ static inline float G2_GetVertBoneWeightNotSlow( const mdxmVertex_t *pVert, cons
 //This is a slightly mangled version of the same function from the sof2sp base.
 //It provides a pretty significant performance increase over the existing one.
 void RB_SurfaceGhoul(CRenderableSurface* surf)
-{
+{	
+	mdxmSurface_t	*surface;
+	
+#ifdef USE_VBO_GHOUL2
+	if ( vk.vboGhoul2Active && surf->vboMesh != NULL && surf->vboMesh->vboItemIndex )
+	{
+		surface = surf->surfaceData;
+
+		// transition to vbo render list
+		if ( tess.vboIndex == 0 ) {
+			RB_EndSurface();
+			RB_BeginSurface( tess.shader, tess.fogNum );
+			// set some dummy parameters for RB_EndSurface
+			tess.numIndexes = 1;
+			tess.numVertexes = 0;
+			VBO_ClearQueue();
+		}
+
+		tess.surfType = SF_MDX;
+		tess.shader->iboOffset = surf->vboMesh->iboOffset;
+		tess.vboIndex = surf->vboMesh->vboItemIndex;
+		tess.mesh_ptr = surf->vboMesh;
+
+		vk_bind_vbo_index( (uint32_t)surf->vboMesh->vboMeshIndex );
+		VBO_QueueItem( surf->vboMesh->vboItemIndex );
+
+		mat3x4_t *boneMatrices = vk_get_uniform_ghoul_bones();
+		const int *boneReferences = (const int *)( (const byte *)surface + surface->ofsBoneReferences );
+		
+		for ( uint32_t i = 0; i < surface->numBoneReferences; i++ ) {
+			int boneIndex = boneReferences[i];
+			const mdxaBone_t& bone = surf->boneCache->EvalRender( boneReferences[i] );
+			Com_Memcpy(
+				boneMatrices[boneIndex],
+				&bone.matrix[0][0],
+				sizeof(mat3x4_t));
+		}
+
+		tess.shader->optimalStageIteratorFunc();
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
+		tess.vboIndex = 0;
+	
+		return;		
+	}
+#endif
+
 #ifdef G2_PERFORMANCE_ANALYSIS
 	G2PerformanceTimer_RB_SurfaceGhoul.Start();
 #endif
@@ -3607,8 +3687,8 @@ void RB_SurfaceGhoul(CRenderableSurface* surf)
 #endif
 
 	// grab the pointer to the surface info within the loaded mesh file
-	mdxmSurface_t* surface = surf->surfaceData;
-	CBoneCache* bones = surf->boneCache;
+	surface = surf->surfaceData;
+	CBoneCache *bones = surf->boneCache;
 
 #ifndef _G2_GORE //we use this later, for gore
 	delete surf;
@@ -3707,7 +3787,7 @@ void RB_SurfaceGhoul(CRenderableSurface* surf)
 		}
 
 #ifdef _G2_GORE
-	CRenderableSurface* storeSurf = surf;
+	//CRenderableSurface* storeSurf = surf;
 
 	while (surf->goreChain)
 	{
@@ -3755,8 +3835,8 @@ void RB_SurfaceGhoul(CRenderableSurface* surf)
 	// NOTE: This is required because a ghoul model might need to be rendered twice a frame (don't cringe,
 	// it's not THAT bad), so we only delete it when doing the glow pass. Warning though, this assumes that
 	// the glow is rendered _second_!!! If that changes, change this!
-	if ( !tess.shader->hasGlow || backEnd.isGlowPass || !vk.dglowActive )
-		delete storeSurf;
+	//if ( !tess.shader->hasGlow || backEnd.isGlowPass || !vk.dglowActive )
+		//delete storeSurf;
 #endif
 
 	tess.numVertexes += surface->numVerts;
@@ -4210,7 +4290,14 @@ qboolean R_LoadMDXM( model_t *mod, void *buffer, const char *mod_name, qboolean 
 
 	if (bAlreadyFound)
 	{
-		return qtrue;	// All done. Stop, go no further, do not LittleLong(), do not pass Go...
+#ifdef USE_VBO_GHOUL2
+		// hotfix, returning here, results in an invalid vbo mesh pointer. 
+		// test using model kyle 
+		if ( !vk.vboGhoul2Active )
+			return qtrue;	// All done. Stop, go no further, do not LittleLong(), do not pass Go...
+#else
+		return qtrue;		// All done. Stop, go no further, do not LittleLong(), do not pass Go...
+#endif
 	}
 
 	bool isAnOldModelFile = false;
@@ -4367,6 +4454,10 @@ qboolean R_LoadMDXM( model_t *mod, void *buffer, const char *mod_name, qboolean 
 		// find the next LOD
 		lod = (mdxmLOD_t *)( (byte *)lod + lod->ofsEnd );
 	}
+
+#ifdef USE_VBO_GHOUL2
+	R_BuildMDXM( mod, mdxm );
+#endif
 	return qtrue;
 }
 

@@ -322,10 +322,10 @@ void vk_record_image_layout_transition( VkCommandBuffer cmdBuf, VkImage image,
 	barrier.subresourceRange.baseArrayLayer = 0;
 	barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
-	if ( src_stage_mask == VK_NULL_HANDLE ) 
+	if ( src_stage_mask == NULL ) 
 		src_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
-	if ( dst_stage_mask == VK_NULL_HANDLE ) 
+	if ( dst_stage_mask == NULL ) 
 		dst_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
 	qvkCmdPipelineBarrier(cmdBuf, src_stage_mask, dst_stage_mask, 0, 0, NULL, 0, NULL, 1, &barrier);
@@ -620,6 +620,72 @@ static void vk_ensure_staging_buffer_allocation( VkDeviceSize size ) {
 	VK_SET_OBJECT_NAME(vk_world.staging_buffer_memory, "staging buffer memory", VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_MEMORY_EXT);
 }
 
+static byte *vk_resample_image_data( const int target_format, byte *data, const int data_size, int *bytes_per_pixel ) {
+	byte		*buffer;
+	uint16_t	*p;
+	int			i, n;
+
+	switch ( target_format ) {
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+		buffer = (byte*)ri.Hunk_AllocateTempMemory( data_size / 2 );
+		p = (uint16_t*)buffer;
+		for ( i = 0; i < data_size; i += 4, p++ ) {
+			byte r = data[i + 0];
+			byte g = data[i + 1];
+			byte b = data[i + 2];
+			byte a = data[i + 3];
+			*p = (uint32_t)((a / 255.0) * 15.0 + 0.5) |
+				((uint32_t)((r / 255.0) * 15.0 + 0.5) << 4) |
+				((uint32_t)((g / 255.0) * 15.0 + 0.5) << 8) |
+				((uint32_t)((b / 255.0) * 15.0 + 0.5) << 12);
+		}
+		*bytes_per_pixel = 2;
+		return buffer; // must be freed after upload!
+
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+		buffer = (byte*)ri.Hunk_AllocateTempMemory( data_size / 2 );
+		p = (uint16_t*)buffer;
+		for ( i = 0; i < data_size; i += 4, p++ ) {
+			byte r = data[i + 0];
+			byte g = data[i + 1];
+			byte b = data[i + 2];
+			*p = (uint32_t)((b / 255.0) * 31.0 + 0.5) |
+				((uint32_t)((g / 255.0) * 31.0 + 0.5) << 5) |
+				((uint32_t)((r / 255.0) * 31.0 + 0.5) << 10) |
+				(1 << 15);
+		}
+		*bytes_per_pixel = 2;
+		return buffer; // must be freed after upload!
+
+	case VK_FORMAT_B8G8R8A8_UNORM:
+		buffer = (byte*)ri.Hunk_AllocateTempMemory( data_size );
+		for ( i = 0; i < data_size; i += 4 ) {
+			buffer[i + 0] = data[i + 2];
+			buffer[i + 1] = data[i + 1];
+			buffer[i + 2] = data[i + 0];
+			buffer[i + 3] = data[i + 3];
+		}
+		*bytes_per_pixel = 4;
+		return buffer;
+
+	case VK_FORMAT_R8G8B8_UNORM: {
+		buffer = (byte*)ri.Hunk_AllocateTempMemory( ( data_size * 3 ) / 4 );
+		for ( i = 0, n = 0; i < data_size; i += 4, n += 3 ) {
+			buffer[n + 0] = data[i + 0];
+			buffer[n + 1] = data[i + 1];
+			buffer[n + 2] = data[i + 2];
+		}
+		*bytes_per_pixel = 3;
+		return buffer;
+	}
+
+	default:
+		*bytes_per_pixel = 4;
+		return data;
+	}
+}
+
+
 void vk_upload_image_data( image_t *image, int x, int y, int width, 
 	int height, int mipmaps, byte *pixels, int size ) 
 {
@@ -638,7 +704,7 @@ void vk_upload_image_data( image_t *image, int x, int y, int width,
 		buf = pixels;
 	}
 	else {
-		buf = vk_resample_image_data( image, pixels, size, &bpp );
+		buf = vk_resample_image_data( image->internalFormat, pixels, size, &bpp );
 	}
 
 	while (qtrue) {
@@ -692,14 +758,14 @@ void vk_upload_image_data( image_t *image, int x, int y, int width,
 	vk_record_image_layout_transition(command_buffer, image->handle, VK_IMAGE_ASPECT_COLOR_BIT, 0, 
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_ACCESS_TRANSFER_WRITE_BIT, 
 		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-		VK_NULL_HANDLE, VK_NULL_HANDLE);
+		NULL, NULL);
 
 	qvkCmdCopyBufferToImage(command_buffer, vk_world.staging_buffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, num_regions, regions);
 
 	vk_record_image_layout_transition(command_buffer, image->handle, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, 
 		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, 
 		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, 
-		VK_NULL_HANDLE, VK_NULL_HANDLE);
+		NULL, NULL);
 
 	vk_end_command_buffer(command_buffer);
 
@@ -809,72 +875,6 @@ void vk_update_descriptor_set( image_t *image, qboolean mipmap ) {
 	qvkUpdateDescriptorSets(vk.device, 1, &descriptor_write, 0, NULL);
 }
 
-byte *vk_resample_image_data( const image_t *image, byte *data, const int data_size, int *bytes_per_pixel )
-{
-	byte		*buffer;
-	uint16_t	*p;
-	int			i, n;
-
-	switch (image->internalFormat) {
-	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
-		buffer = (byte*)ri.Hunk_AllocateTempMemory(data_size / 2);
-		p = (uint16_t*)buffer;
-		for (i = 0; i < data_size; i += 4, p++) {
-			byte r = data[i + 0];
-			byte g = data[i + 1];
-			byte b = data[i + 2];
-			byte a = data[i + 3];
-			*p = (uint32_t)((a / 255.0) * 15.0 + 0.5) |
-				((uint32_t)((r / 255.0) * 15.0 + 0.5) << 4) |
-				((uint32_t)((g / 255.0) * 15.0 + 0.5) << 8) |
-				((uint32_t)((b / 255.0) * 15.0 + 0.5) << 12);
-		}
-		*bytes_per_pixel = 2;
-		return buffer; // must be freed after upload!
-
-	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-		buffer = (byte*)ri.Hunk_AllocateTempMemory(data_size / 2);
-		p = (uint16_t*)buffer;
-		for (i = 0; i < data_size; i += 4, p++) {
-			byte r = data[i + 0];
-			byte g = data[i + 1];
-			byte b = data[i + 2];
-			*p = (uint32_t)((b / 255.0) * 31.0 + 0.5) |
-				((uint32_t)((g / 255.0) * 31.0 + 0.5) << 5) |
-				((uint32_t)((r / 255.0) * 31.0 + 0.5) << 10) |
-				(1 << 15);
-		}
-		*bytes_per_pixel = 2;
-		return buffer; // must be freed after upload!
-
-	case VK_FORMAT_B8G8R8A8_UNORM:
-		buffer = (byte*)ri.Hunk_AllocateTempMemory(data_size);
-		for (i = 0; i < data_size; i += 4) {
-			buffer[i + 0] = data[i + 2];
-			buffer[i + 1] = data[i + 1];
-			buffer[i + 2] = data[i + 0];
-			buffer[i + 3] = data[i + 3];
-		}
-		*bytes_per_pixel = 4;
-		return buffer;
-
-	case VK_FORMAT_R8G8B8_UNORM: {
-		buffer = (byte*)ri.Hunk_AllocateTempMemory( (data_size * 3) / 4 );
-		for ( i = 0, n = 0; i < data_size; i += 4, n += 3 ) {
-			buffer[n + 0] = data[i + 0];
-			buffer[n + 1] = data[i + 1];
-			buffer[n + 2] = data[i + 2];
-		}
-		*bytes_per_pixel = 3;
-		return buffer;
-	}
-
-	default:
-		*bytes_per_pixel = 4;
-		return data;
-	}
-}
-
 void vk_create_image( image_t *image, int width, int height, int mip_levels ) {
 	VkFormat format = (VkFormat)image->internalFormat;
 
@@ -954,6 +954,23 @@ void vk_create_image( image_t *image, int width, int height, int mip_levels ) {
 	VK_SET_OBJECT_NAME( image->descriptor_set, image->imgName, VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
 }
 
+static void vk_destroy_image_resources( VkImage *image, VkImageView *imageView )
+{
+	if ( image != NULL ) {
+		if ( *image != VK_NULL_HANDLE ) {
+			qvkDestroyImage( vk.device, *image, NULL );
+			*image = VK_NULL_HANDLE;
+		}
+	}
+	if ( imageView != NULL ) {
+		if ( *imageView != VK_NULL_HANDLE ) {
+			qvkDestroyImageView( vk.device, *imageView, NULL );
+			*imageView = VK_NULL_HANDLE;
+		}
+	}
+}
+
+
 void vk_delete_textures( void ) {
 
 	image_t *img;
@@ -963,13 +980,9 @@ void vk_delete_textures( void ) {
 
 	for (i = 0; i < tr.numImages; i++) {
 		img = tr.images[i];
+		vk_destroy_image_resources( &img->handle, &img->view );
+
 		// img->descriptor will be released with pool reset
-		if (img->handle != VK_NULL_HANDLE) {
-			qvkDestroyImage(vk.device, img->handle, NULL);
-			qvkDestroyImageView(vk.device, img->view, NULL);
-		}
-		img->handle = VK_NULL_HANDLE;
-		img->view = VK_NULL_HANDLE;
 	}
 
 	Com_Memset(tr.images, 0, sizeof(tr.images));

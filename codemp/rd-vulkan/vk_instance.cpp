@@ -55,7 +55,7 @@ PFN_vkGetPhysicalDeviceSurfaceFormatsKHR		qvkGetPhysicalDeviceSurfaceFormatsKHR;
 PFN_vkGetPhysicalDeviceSurfacePresentModesKHR	qvkGetPhysicalDeviceSurfacePresentModesKHR;
 PFN_vkGetPhysicalDeviceSurfaceSupportKHR		qvkGetPhysicalDeviceSurfaceSupportKHR;
 
-#ifndef NDEBUG
+#ifdef USE_VK_VALIDATION
 PFN_vkCreateDebugReportCallbackEXT				qvkCreateDebugReportCallbackEXT;
 PFN_vkDestroyDebugReportCallbackEXT				qvkDestroyDebugReportCallbackEXT;
 #endif
@@ -178,6 +178,12 @@ static qboolean vk_used_instance_extension( const char *ext )
     if (Q_stricmp(ext, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
         return qtrue;
 
+	if ( Q_stricmp( ext, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME ) == 0 )
+		return qtrue;
+
+	if ( Q_stricmp( ext, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME ) == 0 )
+		return qtrue;
+
     return qfalse;
 
 }
@@ -191,9 +197,10 @@ static void vk_create_instance( void )
     VkResult result;
     VkApplicationInfo appInfo;
     VkInstanceCreateInfo desc;
+	VkInstanceCreateFlags flags;
     VkExtensionProperties *extension_properties;
     uint32_t i, n, len, count, extension_count;
-    const char **extension_names, *ext, *end;
+    const char **extension_names, *end;
 	char *str;
 
 	vk_debug("----- Create Instance -----\n");
@@ -206,6 +213,7 @@ static void vk_create_instance( void )
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_MAKE_VERSION(1, 0, 0);
 
+	flags = 0;
     count = 0;
     extension_count = 0;
 
@@ -222,7 +230,7 @@ static void vk_create_instance( void )
 	end = &vk.instance_extensions_string[sizeof(vk.instance_extensions_string) - 1];
 
     for (i = 0; i < count; i++) {
-        ext = extension_properties[i].extensionName;
+        const char *ext = extension_properties[i].extensionName;
 
 		// add the device extension to vk.instance_extensions_string
 		{
@@ -240,21 +248,32 @@ static void vk_create_instance( void )
         if (!vk_used_instance_extension(ext)) {
             continue;
         }
+
+		// search for duplicates
         for (n = 0; n < extension_count; n++) {
             if (Q_stricmp(ext, extension_names[n]) == 0) {
                 break;
             }
         }
+
         if (n != extension_count) {
-            continue; // skip duplicate
+            continue;
         }
+
         extension_names[extension_count++] = ext;
+
+
+		if ( Q_stricmp( ext, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME ) == 0 ) {
+			flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+		}
+
+		ri.Printf(PRINT_DEVELOPER, "instance extension: %s\n", ext);
     }
 
     // create instance
     desc.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     desc.pNext = NULL;
-    desc.flags = 0;
+    desc.flags = flags;
     desc.pApplicationInfo = &appInfo;
     desc.enabledExtensionCount = extension_count;
     desc.ppEnabledExtensionNames = extension_names;
@@ -289,6 +308,10 @@ static void vk_create_instance( void )
 
     result = qvkCreateInstance(&desc, NULL, &vk.instance);
 #endif
+
+	// hotfix: reintroduce duplicate instance creation. 
+	// mysterious x64-linux configuration causing a crash after vid_restart.
+	result = qvkCreateInstance(&desc, NULL, &vk.instance);
 
     switch (result) {
         case VK_SUCCESS:
@@ -695,7 +718,9 @@ void vk_init_library( void )
 	uint32_t device_count;
 	int device_index, i;
 	VkResult res;
+	qboolean deviceCountRetried = qfalse;
 
+__initStart:
 	Com_Memset(&vk, 0, sizeof(vk));
 
 	qvkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)ri.VK_GetInstanceProcAddress();
@@ -737,13 +762,34 @@ void vk_init_library( void )
 #endif
 
 	// create surface
-	if ( !ri.VK_createSurfaceImpl( vk.instance, (void**)&vk.surface ) ) {
+	if (!ri.VK_createSurfaceImpl(vk.instance, (void**)&vk.surface)) {
 		ri.Error(ERR_FATAL, "Error creating Vulkan surface");
 		return;
 	}
 
 	res = qvkEnumeratePhysicalDevices(vk.instance, &device_count, NULL);
 	if (device_count == 0) {
+#ifdef _WIN32
+		if (!deviceCountRetried) {
+			// May be a conflict between VK_LAYER_AMD_swichable_graphics and VK_LAYER_NV_optimus on laptops with AMD + Nvidia GPUs:
+			// https://stackoverflow.com/questions/68109171/vkenumeratephysicaldevices-not-finding-all-gpus/68631366#68631366
+			ri.Printf(PRINT_WARNING, "Vulkan: No physical devices found. Retrying with AMD_SWITCHABLE_GRAPHICS disabled.\n");
+
+			// Clear instance with a subset of vk_shutdown
+			qvkDestroySurfaceKHR(vk.instance, vk.surface, NULL);
+#ifdef USE_VK_VALIDATION
+			if (qvkDestroyDebugReportCallbackEXT && vk.debug_callback)
+				qvkDestroyDebugReportCallbackEXT(vk.instance, vk.debug_callback, NULL);
+#endif
+			qvkDestroyInstance(vk.instance, NULL);
+			vk_deinit_library();
+
+			// Disable the AMD layer and try again.
+			SetEnvironmentVariable("DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1", "1");
+			deviceCountRetried = qtrue;
+			goto __initStart;
+		}
+#endif
 		ri.Error(ERR_FATAL, "Vulkan: no physical devices found");
 		return;
 	}

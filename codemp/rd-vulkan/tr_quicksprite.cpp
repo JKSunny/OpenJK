@@ -37,7 +37,7 @@ CQuickSpriteSystem SQuickSprite;
 //////////////////////////////////////////////////////////////////////
 
 CQuickSpriteSystem::CQuickSpriteSystem() :
-	vk_pipeline(VK_NULL_HANDLE),
+	vk_pipeline(NULL),
 	mTexBundle(NULL),
 	mFogIndex(-1),
 	mUseFog(qfalse)
@@ -89,7 +89,7 @@ void CQuickSpriteSystem::Flush( void )
 	// surface sprite fogs are rendered without fog collapse
 	if (mUseFog)
 	{
-		uint32_t pipeline = vk.std_pipeline.fog_pipelines[tess.shader->fogPass - 1][2][tess.shader->polygonOffset];
+		uint32_t pipeline = vk.std_pipeline.fog_pipelines[0][tess.shader->fogPass - 1][2][tess.shader->polygonOffset];
 		const fog_t *fog;
 		int			i;
 

@@ -88,7 +88,7 @@ static void R_SetupEntityLightingGrid( trRefEntity_t *ent ) {
 	float			totalFactor;
 	unsigned short	*startGridPos;
 
-	if (r_fullbright->integer || r_ambientScale->integer == -1 )
+	if (r_fullbright->integer || r_ambientScale->integer == -1)
 	{
 		ent->ambientLight[0] = ent->ambientLight[1] = ent->ambientLight[2] = 255.0;
 		ent->directedLight[0] = ent->directedLight[1] = ent->directedLight[2] = 255.0;
@@ -382,9 +382,11 @@ void R_SetupEntityLighting( const trRefdef_t *refdef, trRefEntity_t *ent ) {
 
 	// transform the direction to local space
 	VectorNormalize( lightDir );
-	ent->lightDir[0] = DotProduct( lightDir, ent->e.axis[0] );
-	ent->lightDir[1] = DotProduct( lightDir, ent->e.axis[1] );
-	ent->lightDir[2] = DotProduct( lightDir, ent->e.axis[2] );
+	VectorCopy(lightDir, ent->lightDir);
+
+	ent->modelLightDir[0] = DotProduct( lightDir, ent->e.axis[0] );
+	ent->modelLightDir[1] = DotProduct( lightDir, ent->e.axis[1] );
+	ent->modelLightDir[2] = DotProduct( lightDir, ent->e.axis[2] );
 
 #ifdef USE_PMLIGHT
 	if (r_shadows->integer == 2 && r_dlightMode->integer == 2) {

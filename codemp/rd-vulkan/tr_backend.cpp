@@ -249,7 +249,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			continue;
 		}
 
-		oldSort = drawSurf->sort;
+		//oldSort = drawSurf->sort;
 
 		//
 		// change the tess parameters if needed
@@ -318,7 +318,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			// the world (like water) continue with the wrong frame
 			tess.shaderTime = backEnd.refdef.floatTime - tess.shader->timeOffset;
 
-			Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelMatrix, 64);
+			Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelViewMatrix, 64);
 			vk_set_depthrange( depthRange );
 			vk_update_mvp(NULL);
 			oldEntityNum = entityNum;
@@ -336,7 +336,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	backEnd.refdef.floatTime = originalTime;
 
 	// go back to the world modelview matrix
-	Com_Memcpy(vk_world.modelview_transform, backEnd.viewParms.world.modelMatrix, 64);
+	Com_Memcpy(vk_world.modelview_transform, backEnd.viewParms.world.modelViewMatrix, 64);
 	//vk_update_mvp();
 	vk_set_depthrange(DEPTH_RANGE_NORMAL);
 
@@ -473,7 +473,7 @@ static void RB_RenderLitSurfList( dlight_t *dl ) {
 
 			vk_set_depthrange( depthRange );
 
-			Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelMatrix, 64);
+			Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelViewMatrix, 64);
 			vk_update_mvp(NULL);
 
 			oldEntityNum = entityNum;
@@ -491,7 +491,7 @@ static void RB_RenderLitSurfList( dlight_t *dl ) {
 	backEnd.refdef.floatTime = originalTime;
 
 	// go back to the world modelview matrix
-	Com_Memcpy(vk_world.modelview_transform, backEnd.viewParms.world.modelMatrix, 64);
+	Com_Memcpy(vk_world.modelview_transform, backEnd.viewParms.world.modelViewMatrix, 64);
 	//vk_update_mvp();
 
 	vk_set_depthrange(DEPTH_RANGE_NORMAL);
@@ -936,9 +936,9 @@ const void	*RB_SwapBuffers( const void *data ) {
 	const swapBuffersCommand_t	*cmd;
 
 	// finish any 2D drawing if needed
-	//if ( tess.numIndexes ) {
-		RB_EndSurface();
-	//}
+	RB_EndSurface();
+
+	ResetGhoul2RenderableSurfaceHeap();
 
 	// texture swapping test
 	if ( r_showImages->integer ) {
@@ -995,17 +995,13 @@ const void	*RB_WorldEffects( const void *data )
 	cmd = (const drawBufferCommand_t *)data;
 
 	// Always flush the tess buffer
-	//if ( tess.shader && tess.numIndexes )
-	//{
+	if ( tess.shader && tess.numIndexes )
 		RB_EndSurface();
-	//}
 
 	RB_RenderWorldEffects();
 
-	if(tess.shader)
-	{
+	if ( tess.shader )
 		RB_BeginSurface( tess.shader, tess.fogNum );
-	}
 
 	return (const void *)(cmd + 1);
 }
