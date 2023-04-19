@@ -3200,6 +3200,7 @@ void R_LoadCubemapEntities(const char *cubemapEntityName)
 			Q_strncpyz(cubemap->name, name, MAX_QPATH);
 			VectorCopy(origin, cubemap->origin);
 			cubemap->parallaxRadius = parallaxRadius;
+			cubemap->image = nullptr;
 			numCubemaps++;
 		}
 	}
@@ -3269,7 +3270,17 @@ static void R_RenderAllCubemaps()
 			RE_ClearScene();
 			R_AddConvolveCubemapCmd(&tr.cubemaps[i], i);
 			R_IssuePendingRenderCommands();
-			RE_EndFrame( &frontEndMsec, &backEndMsec );
+
+			gpuFrame_t *currentFrame = backEndData->currentFrame;
+			assert(!currentFrame->sync);
+			currentFrame->sync = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+			backEndData->realFrameNumber++;
+			ri.WIN_Present(&window);
+			backEnd.framePostProcessed = qfalse;
+			backEnd.projection2D = qfalse;
+			backEnd.frameUBOsInitialized = qfalse;
+			R_InitNextFrame();
 		}
 	}
 }
@@ -4176,7 +4187,7 @@ world_t *R_LoadBSP(const char *name, int *bspIndex)
 	R_CalcVertexLightDirs(worldData);
 
 	// load cubemaps
-	if (r_cubeMapping->integer)
+	if (r_cubeMapping->integer && bspIndex == nullptr)
 	{
 		// Try loading an env.json file first
 		R_LoadEnvironmentJson(worldData->baseName);
