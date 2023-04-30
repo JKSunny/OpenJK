@@ -1167,75 +1167,15 @@ static Pass *RB_CreatePass( Allocator& allocator, int capacity )
 	return pass;
 }
 
-static void RB_PrepareForEntity( int entityNum, int *oldDepthRange, float originalTime )
+static void RB_PrepareForEntity( int entityNum )
 {
-	int depthRange = 0;
-
 	if ( entityNum != REFENTITYNUM_WORLD )
 	{
 		backEnd.currentEntity = &backEnd.refdef.entities[entityNum];
-		backEnd.refdef.floatTime = originalTime - backEnd.currentEntity->e.shaderTime;
-		// we have to reset the shaderTime as well otherwise image animations start
-		// from the wrong frame
-		tess.shaderTime = backEnd.refdef.floatTime - tess.shader->timeOffset;
-
-		// set up the transformation matrix
-		R_RotateForEntity( backEnd.currentEntity, &backEnd.viewParms, &backEnd.ori );
-
-		if ( backEnd.currentEntity->e.renderfx & RF_NODEPTH ) {
-			// No depth at all, very rare but some things for seeing through walls
-			depthRange = 2;
-		}
-		else if ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) {
-			// hack the depth range to prevent view model from poking into walls
-			depthRange = 1;
-		}
-	} else {
-		backEnd.currentEntity = &tr.worldEntity;
-		backEnd.refdef.floatTime = originalTime;
-		backEnd.ori = backEnd.viewParms.world;
-
-		// we have to reset the shaderTime as well otherwise image animations on
-		// the world (like water) continue with the wrong frame
-		tess.shaderTime = backEnd.refdef.floatTime - tess.shader->timeOffset;
 	}
-
-	GL_SetModelviewMatrix( backEnd.ori.modelViewMatrix );
-
-	// change depthrange. Also change projection matrix so first person weapon
-	// does not look like coming out of the screen.
-	if ( *oldDepthRange != depthRange )
+	else
 	{
-		switch ( depthRange )
-		{
-			default:
-			case 0:
-				if ( backEnd.viewParms.stereoFrame != STEREO_CENTER )
-				{
-					GL_SetProjectionMatrix(backEnd.viewParms.projectionMatrix);
-				}
-				break;
-
-			case 1:
-				if ( backEnd.viewParms.stereoFrame != STEREO_CENTER )
-				{
-					viewParms_t temp = backEnd.viewParms;
-					R_SetupProjection(&temp, r_znear->value, 0, qfalse);
-					GL_SetProjectionMatrix(temp.projectionMatrix);
-				}
-				break;
-
-			case 2:
-				if ( backEnd.viewParms.stereoFrame != STEREO_CENTER )
-				{
-					viewParms_t temp = backEnd.viewParms;
-					R_SetupProjection(&temp, r_znear->value, 0, qfalse);
-					GL_SetProjectionMatrix(temp.projectionMatrix);
-				}
-				break;
-		}
-
-		*oldDepthRange = depthRange;
+		backEnd.currentEntity = &tr.worldEntity;
 	}
 }
 
@@ -1296,7 +1236,7 @@ static void RB_SubmitDrawSurfsForDepthFill(
 		// change the modelview matrix if needed
 		if ( entityNum != oldEntityNum )
 		{
-			RB_PrepareForEntity(entityNum, &oldDepthRange, originalTime);
+			RB_PrepareForEntity(entityNum);
 			oldEntityNum = entityNum;
 		}
 
@@ -1386,7 +1326,7 @@ static void RB_SubmitDrawSurfs(
 
 		if ( entityNum != oldEntityNum )
 		{
-			RB_PrepareForEntity(entityNum, &oldDepthRange, originalTime);
+			RB_PrepareForEntity(entityNum);
 			oldEntityNum = entityNum;
 		}
 
@@ -2289,9 +2229,11 @@ static void RB_UpdateCameraConstants(gpuFrame_t *frame)
 	const float zmax = backEnd.viewParms.zFar;
 	const float zmin = r_znear->value;
 
-	// TODO: Add ViewProjection Matrix
-
 	CameraBlock cameraBlock = {};
+	Matrix16Multiply(
+		backEnd.viewParms.projectionMatrix,
+		backEnd.viewParms.world.modelViewMatrix,
+		cameraBlock.viewProjectionMatrix);
 	VectorSet4(cameraBlock.viewInfo, zmax / zmin, zmax, 0.0f, 0.0f);
 	VectorCopy(backEnd.refdef.viewaxis[0], cameraBlock.viewForward);
 	VectorCopy(backEnd.refdef.viewaxis[1], cameraBlock.viewLeft);
@@ -2312,6 +2254,7 @@ static void RB_UpdateSceneConstants(gpuFrame_t *frame)
 	else
 		sceneBlock.globalFogIndex = -1;
 	sceneBlock.currentTime = backEnd.refdef.time;
+	sceneBlock.frameTime = backEnd.refdef.frameTime;
 
 	tr.sceneUboOffset = RB_AppendConstantsData(
 		frame, &sceneBlock, sizeof(sceneBlock));
@@ -2414,11 +2357,6 @@ static void RB_UpdateEntityMatrixConstants(
 	
 	Matrix16Copy(ori.modelViewMatrix, modelViewMatrix);
 	VectorCopy(ori.viewOrigin, entityBlock.localViewOrigin);
-
-	Matrix16Multiply(
-		backEnd.viewParms.projectionMatrix,
-		modelViewMatrix,
-		entityBlock.modelViewProjectionMatrix);
 }
 
 static void RB_UpdateEntityModelConstants(
@@ -2442,19 +2380,7 @@ static void RB_UpdateSkyEntityConstants(gpuFrame_t *frame)
 	EntityBlock skyEntityBlock = {};
 	skyEntityBlock.fxVolumetricBase = -1.0f;
 
-	matrix_t translation;
-	Matrix16Translation(backEnd.viewParms.ori.origin, translation);
-
-	matrix_t modelViewMatrix;
-	Matrix16Multiply(
-		backEnd.viewParms.world.modelViewMatrix,
-		translation,
-		modelViewMatrix);
-	Matrix16Multiply(
-		backEnd.viewParms.projectionMatrix,
-		modelViewMatrix,
-		skyEntityBlock.modelViewProjectionMatrix);
-
+	Matrix16Translation(backEnd.viewParms.ori.origin, skyEntityBlock.modelMatrix);
 	tr.skyEntityUboOffset = RB_AppendConstantsData(
 		frame, &skyEntityBlock, sizeof(skyEntityBlock));
 }
@@ -2627,8 +2553,8 @@ static void RB_UpdateShaderEntityConstants(
 	shaderInstanceBlock.portalRange = shader->portalRange;
 	shaderInstanceBlock.time =
 		backEnd.refdef.floatTime - shader->timeOffset;
-	if (entityNum == REFENTITYNUM_WORLD)
-		shaderInstanceBlock.time -= refEntity->e.shaderTime;
+	if (entityNum != REFENTITYNUM_WORLD)
+		shaderInstanceBlock.time = backEnd.refdef.floatTime - refEntity->e.shaderTime;
 
 	const int uboOffset = RB_AppendConstantsData(
 		frame, &shaderInstanceBlock, sizeof(shaderInstanceBlock));
