@@ -83,7 +83,6 @@ uniform int u_ColorGen;
 
 out vec4 var_TexCoords;
 out vec4 var_Color;
-out vec3 var_N;
 
 #if defined(PER_PIXEL_LIGHTING)
 out vec4 var_Normal;
@@ -911,7 +910,8 @@ void main()
 	attenuation = 1.0;
   #endif
 
-	N = CalcNormal(var_Normal.xyz, var_Tangent, texCoords);
+	vec3 vertexNormal = mix(var_Normal.xyz, -var_Normal.xyz, float(gl_FrontFacing));
+	N = CalcNormal(vertexNormal, var_Tangent, texCoords);
 	L /= sqrt(sqrLightDist);
 
   #if defined(USE_SHADOWMAP) || defined(USE_SSAO)
@@ -932,7 +932,7 @@ void main()
 
   #if defined(USE_LIGHTMAP) || defined(USE_LIGHT_VERTEX)
 	ambientColor = lightColor;
-	float surfNL = clamp(dot(var_Normal.xyz, L), 0.0, 1.0);
+	float surfNL = clamp(dot(vertexNormal, L), 0.0, 1.0);
 
 	// Scale the incoming light to compensate for the baked-in light angle
 	// attenuation.
@@ -962,7 +962,7 @@ void main()
 	float roughness = 0.99;
   #if defined(USE_SPECULARMAP)
   #if !defined(USE_SPECGLOSS)
-	vec4 ORMS = mix(vec4(1.0), texture(u_SpecularMap, texCoords), u_EnableTextures.z);
+	vec4 ORMS = texture(u_SpecularMap, texCoords);
 	ORMS.xyzw *= u_SpecularScale.zwxy;
 
 	specular.rgb = mix(vec3(0.08) * ORMS.w, diffuse.rgb, ORMS.z);
@@ -971,7 +971,7 @@ void main()
 	roughness = mix(0.01, 1.0, ORMS.y);
 	AO = min(ORMS.x, AO);
   #else
-	specular = mix(vec4(1.0), texture(u_SpecularMap, texCoords), u_EnableTextures.z);
+	specular = texture(u_SpecularMap, texCoords);
 	specular.rgb *= u_SpecularScale.xyz;
 	roughness = mix(1.0, 0.01, specular.a * (1.0 - u_SpecularScale.w));
   #endif
@@ -1006,7 +1006,7 @@ void main()
   #if defined(USE_PRIMARY_LIGHT)
 	vec3  L2   = normalize(u_PrimaryLightOrigin.xyz);
 	vec3  H2   = normalize(L2 + E);
-	float NL2  = clamp(min(dot(N,  L2), dot(var_Normal.xyz, L2)), 0.0, 1.0);
+	float NL2  = clamp(min(dot(N,  L2), dot(vertexNormal, L2)), 0.0, 1.0);
 	float L2H2 = clamp(dot(L2, H2), 0.0, 1.0);
 	float NH2  = clamp(dot(N,  H2), 0.0, 1.0);
 	float VH2  = clamp(dot(E, H), 0.0, 1.0);
@@ -1021,7 +1021,7 @@ void main()
 	out_Color.rgb += lightColor * reflectance * NL2;
   #endif
 	
-	out_Color.rgb += CalcDynamicLightContribution(roughness, N, E, u_ViewOrigin, viewDir, NE, diffuse.rgb, specular.rgb, var_Normal.xyz);
+	out_Color.rgb += CalcDynamicLightContribution(roughness, N, E, u_ViewOrigin, viewDir, NE, diffuse.rgb, specular.rgb, vertexNormal);
 	out_Color.rgb += CalcIBLContribution(roughness, N, E, u_ViewOrigin, viewDir, NE, specular.rgb * AO);
 #else
 	lightColor = var_Color.rgb;

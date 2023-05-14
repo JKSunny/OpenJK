@@ -3178,8 +3178,10 @@ static void CollapseStagesToLightall(shaderStage_t *stage, shaderStage_t *lightm
 					R_LoadPackedMaterialImage(stage, imageName, specularFlags);
 					if (!stage->bundle[TB_ORMSMAP].image[0])
 					{
-						stage->specularType = SPEC_SPECGLOSS;
-						defs |= LIGHTDEF_USE_SPEC_GLOSS;
+						stage->specularScale[0] = 0.0f;
+						stage->specularScale[2] =
+						stage->specularScale[3] = 1.0f;
+						stage->specularScale[1] = 0.5f;
 					}
 				}
 			}
@@ -3427,6 +3429,19 @@ static qboolean CollapseStagesToGLSL(void)
 		}
 	}
 
+	if (skip)
+	{
+		// set default specular scale for skipped shaders that will use metalness workflow by default
+		for (i = 0; i < MAX_SHADER_STAGES; i++)
+		{
+			shaderStage_t *pStage = &stages[i];
+			pStage->specularScale[0] = 0.0f;
+			pStage->specularScale[2] =
+			pStage->specularScale[3] = 1.0f;
+			pStage->specularScale[1] = 0.5f;
+		}
+	}
+
 	// remove inactive stages
 	numStages = 0;
 	for (i = 0; i < MAX_SHADER_STAGES; i++)
@@ -3447,7 +3462,7 @@ static qboolean CollapseStagesToGLSL(void)
 
 	// convert any remaining lightmap stages to a lighting pass with a white texture
 	// only do this with r_sunlightMode non-zero, as it's only for correct shadows.
-	if (r_sunlightMode->integer && shader.numDeforms == 0)
+	if (r_sunlightMode->integer && shader.numDeforms != 1)
 	{
 		for (i = 0; i < MAX_SHADER_STAGES; i++)
 		{
@@ -3474,7 +3489,7 @@ static qboolean CollapseStagesToGLSL(void)
 	}
 
 	// convert any remaining lightingdiffuse stages to a lighting pass
-	if (shader.numDeforms == 0)
+	if (shader.numDeforms != 1)
 	{
 		for (i = 0; i < MAX_SHADER_STAGES; i++)
 		{
@@ -3924,7 +3939,7 @@ static shader_t *FinishShader( void ) {
 	if (stages[0].active &&
 		stages[0].bundle[0].isLightmap &&
 		stages[1].active &&
-		shader.numDeforms == 0) //only for shaders that can be collapsed
+		shader.numDeforms != 1)
 	{
 		int blendBits = stages[1].stateBits & (GLS_DSTBLEND_BITS | GLS_SRCBLEND_BITS);
 
