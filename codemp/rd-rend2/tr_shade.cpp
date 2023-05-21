@@ -1612,6 +1612,7 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input, const VertexArrays
 					(pStage->glslShaderIndex & LIGHTDEF_LIGHTTYPE_MASK))
 			{
 				samplerBindingsWriter.AddStaticImage(tr.screenShadowImage, TB_SHADOWMAP);
+				enableTextures[2] = 1.0f;
 			}
 			else
 				samplerBindingsWriter.AddStaticImage(tr.whiteImage, TB_SHADOWMAP);
@@ -2027,6 +2028,9 @@ void RB_EndSurface( void ) {
 	tess.firstIndex = 0;
 	tess.multiDrawPrimitives = 0;
 	tess.externalIBO = nullptr;
+	glState.vertexAnimation = qfalse;
+	glState.skeletalAnimation = qfalse;
+	glState.genShadows = qfalse;
 
 	GLimp_LogComment( "----------\n" );
 }
