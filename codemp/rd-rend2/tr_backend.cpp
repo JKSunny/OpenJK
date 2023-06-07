@@ -2376,20 +2376,9 @@ static void RB_UpdateEntityMatrixConstants(
 	EntityBlock& entityBlock,
 	const trRefEntity_t *refEntity)
 {
-	matrix_t modelViewMatrix;
 	orientationr_t ori;
-	if (refEntity == &tr.worldEntity)
-	{
-		ori = backEnd.viewParms.world;
-		Matrix16Identity(entityBlock.modelMatrix);
-	}
-	else
-	{
-		R_RotateForEntity(refEntity, &backEnd.viewParms, &ori);
-		Matrix16Copy(ori.modelMatrix, entityBlock.modelMatrix);
-	}
-	
-	Matrix16Copy(ori.modelViewMatrix, modelViewMatrix);
+	R_RotateForEntity(refEntity, &backEnd.viewParms, &ori);
+	Matrix16Copy(ori.modelMatrix, entityBlock.modelMatrix);
 	VectorCopy(ori.viewOrigin, entityBlock.localViewOrigin);
 }
 
@@ -2576,6 +2565,16 @@ static void RB_UpdateShaderEntityConstants(
 	const trRefEntity_t *refEntity,
 	const shader_t *shader)
 {
+	if (shader->numDeforms != 1 && !shader->portalRange)
+	{
+		RB_InsertEntityShaderUboOffset(
+			tr.shaderInstanceUboOffsetsMap,
+			tr.shaderInstanceUboOffsetsMapSize,
+			entityNum,
+			shader->index,
+			-1);
+		return;
+	}
 	ShaderInstanceBlock shaderInstanceBlock = {};
 	ComputeDeformValues(
 		refEntity,
@@ -2690,7 +2689,7 @@ static void RB_UpdateAnimationConstants(
 			continue;
 		CRenderableSurface *RS = (CRenderableSurface *)drawSurf->surface;
 
-		RB_TransformBones(RS);
+		RB_TransformBones(RS, backEndData->realFrameNumber);
 	}
 
 	// now get offsets or add skeletons to ubo
@@ -2710,7 +2709,7 @@ static void RB_UpdateAnimationConstants(
 			tr.animationBoneUboOffsets[i] = RB_AppendConstantsData(
 				frame, &bonesBlock, sizeof(bonesBlock));
 
-			RB_SetBoneUboOffset(RS, tr.animationBoneUboOffsets[i]);
+			RB_SetBoneUboOffset(RS, tr.animationBoneUboOffsets[i], backEndData->realFrameNumber);
 		}
 		else
 		{
@@ -2790,7 +2789,6 @@ static void RB_UpdateConstants(const drawSurf_t *drawSurfs, int numDrawSurfs)
 	gpuFrame_t *frame = backEndData->currentFrame;
 	RB_BeginConstantsUpdate(frame);
 
-	RB_UpdateCameraConstants(frame);
 	if (backEnd.frameUBOsInitialized == qfalse)
 	{
 		RB_UpdateFogsConstants(frame);
@@ -2798,6 +2796,7 @@ static void RB_UpdateConstants(const drawSurf_t *drawSurfs, int numDrawSurfs)
 		RB_UpdateLightsConstants(frame);
 	}
 
+	RB_UpdateCameraConstants(frame);
 	RB_UpdateShaderAndEntityConstants(frame, drawSurfs, numDrawSurfs);
 	RB_UpdateAnimationConstants(frame, drawSurfs, numDrawSurfs);
 

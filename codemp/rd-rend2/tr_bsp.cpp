@@ -3293,17 +3293,14 @@ static void R_AssignCubemapsToWorldSurfaces(world_t *worldData)
 
 static void R_RenderAllCubemaps()
 {
+	R_IssuePendingRenderCommands();
+	R_InitNextFrame();
+
 	GLenum cubemapFormat = GL_RGBA8;
 	if (r_hdr->integer)
 	{
 		cubemapFormat = GL_RGBA16F;
 	}
-
-	// Clear everything before rendering cubemaps to make sure only visable surfaces to the cubemap are rendered
-	int frontEndMsec, backEndMsec;
-	R_IssuePendingRenderCommands();
-	RE_ClearScene();
-	R_InitNextFrame();
 	
 	for (int k = 0; k <= r_cubeMappingBounces->integer; k++)
 	{
@@ -3312,25 +3309,26 @@ static void R_RenderAllCubemaps()
 		int maxCubemaps = MIN(tr.numCubemaps, 128);
 		for (int i = 0; i < maxCubemaps; i++)
 		{
-			RE_BeginFrame(STEREO_CENTER);
 			for (int j = 0; j < 6; j++)
 			{
+				RE_BeginFrame(STEREO_CENTER);
+
 				R_RenderCubemapSide(i, j, qfalse, bounce);
+				R_IssuePendingRenderCommands();
+				R_InitNextFrame();
+
+				gpuFrame_t *currentFrame = backEndData->currentFrame;
+				assert(!currentFrame->sync);
+				currentFrame->sync = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+				backEndData->realFrameNumber++;
+				backEnd.framePostProcessed = qfalse;
+				backEnd.projection2D = qfalse;
+				backEnd.frameUBOsInitialized = qfalse;
 			}
 
-			RE_ClearScene();
 			R_AddConvolveCubemapCmd(&tr.cubemaps[i], i);
 			R_IssuePendingRenderCommands();
-
-			gpuFrame_t *currentFrame = backEndData->currentFrame;
-			assert(!currentFrame->sync);
-			currentFrame->sync = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-
-			backEndData->realFrameNumber++;
-			backEnd.framePostProcessed = qfalse;
-			backEnd.projection2D = qfalse;
-			backEnd.frameUBOsInitialized = qfalse;
-			R_InitNextFrame();
 		}
 	}
 }
@@ -3338,7 +3336,7 @@ static void R_RenderAllCubemaps()
 
 void R_LoadWeatherZones(world_t *worldData, lump_t *brushesLump, lump_t *sidesLump)
 {
-	dbrush_t 	*brushes, *brush;
+	dbrush_t 	*brushes;
 	dbrushside_t	*sides;
 	int			brushesCount, sidesCount;
 

@@ -280,6 +280,7 @@ static void R_Splash()
 
 	qglViewport( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
 	qglClearBufferfv(GL_COLOR, 0, black);
+	qglClear(GL_DEPTH_BUFFER_BIT);
 
 	GLSL_InitSplashScreenShader();
 
@@ -291,7 +292,7 @@ static void R_Splash()
 
 	GL_State(GLS_DEPTHTEST_DISABLE);
 	GLSL_BindProgram(&tr.splashScreenShader);
-	qglDrawArrays(GL_TRIANGLES, 0, 3);
+	RB_InstantTriangle();
 
 	ri.WIN_Present(&window);
 }
@@ -1819,7 +1820,42 @@ static void R_InitStaticConstants()
 	tr.cameraFlareUboOffset = alignedBlockSize;
 	qglBufferSubData(
 		GL_UNIFORM_BUFFER, tr.cameraFlareUboOffset, sizeof(flareCameraBlock), &flareCameraBlock);
-	//alignedBlockSize += (sizeof(CameraBlock) + alignment) & ~alignment; // un-comment if you add more blocks to the static ubo
+	alignedBlockSize += (sizeof(CameraBlock) + alignment) & ~alignment;
+
+	// Setup default light block
+	LightsBlock lightsBlock = {};
+	lightsBlock.numLights = 0;
+
+	tr.defaultLightsUboOffset = alignedBlockSize;
+	qglBufferSubData(
+		GL_UNIFORM_BUFFER, tr.defaultLightsUboOffset, sizeof(lightsBlock), &lightsBlock);
+	alignedBlockSize += (sizeof(LightsBlock) + alignment) & ~alignment;
+
+	// Setup default scene block
+	SceneBlock sceneBlock = {};
+	sceneBlock.globalFogIndex = -1;
+	sceneBlock.currentTime = 0.1f;
+	sceneBlock.frameTime = 0.1f;
+
+	tr.defaultSceneUboOffset = alignedBlockSize;
+	qglBufferSubData(
+		GL_UNIFORM_BUFFER, tr.defaultSceneUboOffset, sizeof(sceneBlock), &sceneBlock);
+	alignedBlockSize += (sizeof(SceneBlock) + alignment) & ~alignment;
+
+	// Setup default fogs block
+	FogsBlock fogsBlock = {};
+	fogsBlock.numFogs = 0;
+	tr.defaultFogsUboOffset = alignedBlockSize;
+	qglBufferSubData(
+		GL_UNIFORM_BUFFER, tr.defaultFogsUboOffset, sizeof(fogsBlock), &fogsBlock);
+	alignedBlockSize += (sizeof(FogsBlock) + alignment) & ~alignment;
+
+	// Setup default shader instance block
+	ShaderInstanceBlock shaderInstanceBlock = {};
+	tr.defaultShaderInstanceUboOffset = alignedBlockSize;
+	qglBufferSubData(
+		GL_UNIFORM_BUFFER, tr.defaultShaderInstanceUboOffset, sizeof(shaderInstanceBlock), &shaderInstanceBlock);
+	alignedBlockSize += (sizeof(ShaderInstanceBlock) + alignment) & ~alignment;
 }
 
 static void R_ShutdownBackEndFrameData()

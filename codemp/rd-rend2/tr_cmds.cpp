@@ -550,6 +550,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 		// Resets resources
 		qglBindBuffer(GL_UNIFORM_BUFFER, thisFrame->ubo);
+		glState.currentGlobalUBO = thisFrame->ubo;
 		thisFrame->uboWriteOffset = 0;
 
 		thisFrame->dynamicIboCommitOffset = 0;
@@ -563,6 +564,10 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 	tr.frameCount++;
 	tr.frameSceneNum = 0;
+
+	tr.fogsUboOffset = -1;
+	tr.lightsUboOffset = -1;
+	tr.sceneUboOffset = -1;
 
 	//
 	// do overdraw measurement
