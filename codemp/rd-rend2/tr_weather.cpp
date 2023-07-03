@@ -124,6 +124,10 @@ namespace
 
 	void GenerateDepthMap()
 	{
+		R_IssuePendingRenderCommands();
+		R_InitNextFrame();
+		RE_BeginFrame(STEREO_CENTER);
+
 		vec3_t mapSize;
 		vec3_t halfMapSize;
 		VectorSubtract(
@@ -141,29 +145,13 @@ namespace
 		VectorMA(tr.world->bmodels[0].bounds[1], 0.5f, mapSize, viewOrigin);
 		viewOrigin[2] = tr.world->bmodels[0].bounds[1][2];
 
-		ri.Printf(PRINT_ALL, "Rendering weather depth from (%.f %.f %.f)\n",
-				viewOrigin[0], viewOrigin[1], viewOrigin[2]);
-
 		orientationr_t orientation;
 		R_SetOrientationOriginAndAxis(orientation, viewOrigin, forward, left, up);
-
-		refdef_t refdef = {};
-		VectorCopy(orientation.origin, refdef.vieworg);
-		for (int i = 0; i < 3; ++i)
-			VectorCopy(orientation.axis[i], refdef.viewaxis[i]);
-
-		RE_BeginScene(&refdef);
-		RE_ClearScene();
-
+		
 		const vec3_t viewBounds[2] = {
 			{ 0.0f, -halfMapSize[1], -halfMapSize[0] },
 			{ halfMapSize[2] * 2.0f, halfMapSize[1], halfMapSize[0] }
 		};
-		ri.Printf(
-			PRINT_ALL,
-			"Weather view bounds (%f %f %f) (%f %f %f)\n",
-			viewBounds[0][0], viewBounds[0][1], viewBounds[0][2],
-			viewBounds[1][0], viewBounds[1][1], viewBounds[1][2]);
 
 		R_SetupViewParmsForOrthoRendering(
 			tr.weatherDepthFbo->width,
@@ -176,8 +164,6 @@ namespace
 			tr.viewParms.projectionMatrix,
 			tr.viewParms.world.modelViewMatrix,
 			tr.weatherSystem->weatherMVP);
-
-		R_IssuePendingRenderCommands();
 
 		if (tr.weatherSystem->numWeatherBrushes > 0)
 		{
@@ -333,15 +319,7 @@ namespace
 						RB_AddQuadStamp(rayPos, left, up, color);
 					}
 				}
-
-				gpuFrame_t *currentFrame = backEndData->currentFrame;
-				assert(!currentFrame->sync);
-				currentFrame->sync = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-
-				backEndData->realFrameNumber++;
-				backEnd.framePostProcessed = qfalse;
-				backEnd.projection2D = qfalse;
-				backEnd.frameUBOsInitialized = qfalse;
+				R_NewFrameSync();
 			}
 
 			// draw remaining quads
@@ -365,19 +343,41 @@ namespace
 			qglDisable(GL_DEPTH_CLAMP);
 		}
 
+		RE_BeginFrame(STEREO_CENTER);
+
 		if (tr.weatherSystem->numWeatherBrushes > 0)
 			tr.viewParms.flags |= VPF_NOCLEAR;
 
-		const int firstDrawSurf = tr.refdef.numDrawSurfs;
+		tr.refdef.numDrawSurfs = 0;
+		tr.refdef.drawSurfs = backEndData->drawSurfs;
+
+		tr.refdef.num_entities = 0;
+		tr.refdef.entities = backEndData->entities;
+
+		tr.refdef.num_dlights = 0;
+		tr.refdef.dlights = backEndData->dlights;
+
+		tr.refdef.fistDrawSurf = 0;
+
+		tr.skyPortalEntities = 0;
+
+		tr.viewParms.targetFbo = tr.weatherDepthFbo;
+		tr.viewParms.currentViewParm = 0;
+		Com_Memcpy(&tr.cachedViewParms[0], &tr.viewParms, sizeof(viewParms_t));
+		tr.numCachedViewParms = 1;
+
+		RB_UpdateConstants(&tr.refdef);
 
 		R_GenerateDrawSurfs(&tr.viewParms, &tr.refdef);
-		R_SortAndSubmitDrawSurfs(
-			tr.refdef.drawSurfs + firstDrawSurf,
-			tr.refdef.numDrawSurfs - firstDrawSurf);
+		R_SortAndSubmitDrawSurfs(tr.refdef.drawSurfs, tr.refdef.numDrawSurfs);
 
 		R_IssuePendingRenderCommands();
-		R_InitNextFrame();
+		tr.refdef.numDrawSurfs = 0;
+		tr.numCachedViewParms = 0;
+
 		RE_EndScene();
+
+		R_NewFrameSync();
 	}
 
 	void RB_SimulateWeather(weatherObject_t *ws, vec2_t *zoneOffsets, int zoneIndex)
@@ -1221,7 +1221,7 @@ void RB_SurfaceWeather( srfWeather_t *surf )
 			{
 				const GLuint currentFrameUbo = backEndData->currentFrame->ubo;
 				const UniformBlockBinding uniformBlockBindings[] = {
-					{ currentFrameUbo, tr.cameraUboOffset, UNIFORM_BLOCK_CAMERA }
+					{ currentFrameUbo, tr.cameraUboOffsets[tr.viewParms.currentViewParm], UNIFORM_BLOCK_CAMERA }
 				};
 				DrawItemSetUniformBlockBindings(
 					item, uniformBlockBindings, frameAllocator);
