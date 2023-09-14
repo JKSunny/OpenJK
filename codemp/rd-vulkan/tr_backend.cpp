@@ -29,7 +29,7 @@ backEndState_t	backEnd;
 
 //bool tr_stencilled = false;
 //extern qboolean tr_distortionPrePost;
-//extern qboolean tr_distortionNegate; 
+//extern qboolean tr_distortionNegate;
 //extern void RB_CaptureScreenImage(void);
 //extern void RB_DistortionFill(void);
 
@@ -193,11 +193,12 @@ RB_RenderDrawSurfList
 */
 void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	shader_t		*shader, *oldShader;
-	int				i, fogNum, entityNum, oldEntityNum, dlighted;
-	Vk_Depth_Range	depthRange; 
+	int				i, fogNum, oldFogNum, entityNum, oldEntityNum, dlighted, oldDlighted;
+	Vk_Depth_Range	depthRange;
 	drawSurf_t		*drawSurf;
 	unsigned int	oldSort;
 	float			oldShaderSort, originalTime;
+	CBoneCache		*oldBoneCache = nullptr;
 
 #ifdef USE_VANILLA_SHADOWFINISH
 	qboolean		didShadowPass;
@@ -217,12 +218,15 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	oldSort					= MAX_UINT;
 	oldShaderSort			= -1;
 	depthRange				= DEPTH_RANGE_NORMAL;
+	oldFogNum				= -1;
+	oldDlighted				= qfalse;
+	qboolean				push_constant;
 #ifdef USE_VANILLA_SHADOWFINISH
 	didShadowPass			= qfalse;
 #endif
-	
+
 	backEnd.pc.c_surfaces	+= numDrawSurfs;
-	
+
 	for (i = 0, drawSurf = drawSurfs; i < numDrawSurfs; i++, drawSurf++)
 	{
 		if (drawSurf->sort == oldSort) {
@@ -230,7 +234,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			rb_surfaceTable[*drawSurf->surface](drawSurf->surface);
 			continue;
 		}
-		
+
 		R_DecomposeSort(drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted);
 
 		if (vk.renderPassIndex == RENDER_PASS_SCREENMAP && entityNum != REFENTITYNUM_WORLD && backEnd.refdef.entities[entityNum].e.renderfx & RF_DEPTHHACK) {
@@ -246,6 +250,8 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		{
 			shader = oldShader;
 			entityNum = oldEntityNum;
+			fogNum = oldFogNum;
+			dlighted = oldDlighted;
 			continue;
 		}
 
@@ -255,7 +261,24 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		// change the tess parameters if needed
 		// a "entityMergable" shader is a shader that can have surfaces from seperate
 		// entities merged into a single batch, like smoke and blood puff sprites
-		if (((oldSort ^ drawSurfs->sort) & ~QSORT_REFENTITYNUM_MASK) || !shader->entityMergable) {
+
+		push_constant = qfalse;
+
+		if ( vk.vboGhoul2Active && *drawSurf->surface == SF_MDX )
+		{
+			if ( ((CRenderableSurface*)drawSurf->surface)->boneCache != oldBoneCache )
+			{
+				RB_EndSurface();
+				RB_BeginSurface( shader, fogNum );
+				oldBoneCache = ((CRenderableSurface*)drawSurf->surface)->boneCache;
+				vk.cmd->bones_ubo_offset = RB_GetBoneUboOffset((CRenderableSurface*)drawSurf->surface);
+			}
+		}
+
+		//if (((oldSort ^ drawSurfs->sort) & ~QSORT_REFENTITYNUM_MASK) || !shader->entityMergable) {
+		if ( shader != oldShader || fogNum != oldFogNum || dlighted != oldDlighted
+			|| ( entityNum != oldEntityNum && !shader->entityMergable ) )
+		{
 			if (oldShader != NULL) {
 				RB_EndSurface();
 			}
@@ -278,6 +301,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 			RB_BeginSurface(shader, fogNum);
 			oldShader = shader;
+			oldFogNum = fogNum;
+			oldDlighted = dlighted;
+
+			push_constant = qtrue;
 		}
 
 		oldSort = drawSurf->sort;
@@ -318,9 +345,13 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			// the world (like water) continue with the wrong frame
 			tess.shaderTime = backEnd.refdef.floatTime - tess.shader->timeOffset;
 
-			Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelViewMatrix, 64);
 			vk_set_depthrange( depthRange );
-			vk_update_mvp(NULL);
+
+			if ( push_constant ) {
+				Com_Memcpy(vk_world.modelview_transform, backEnd.ori.modelViewMatrix, 64);
+				vk_update_mvp(NULL);
+			}
+
 			oldEntityNum = entityNum;
 		}
 
@@ -346,7 +377,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		RB_ShadowFinish();
 		didShadowPass = qtrue;
 	}
-#endif 
+#endif
 }
 
 #ifdef USE_PMLIGHT
@@ -382,7 +413,7 @@ static void RB_RenderLitSurfList( dlight_t *dl ) {
 	Vk_Depth_Range	depthRange;
 	const litSurf_t *litSurf;
 	unsigned int	oldSort;
-	double			originalTime; // -EC- 
+	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
 	originalTime = backEnd.refdef.floatTime;
@@ -535,7 +566,7 @@ void RE_StretchRaw ( int x, int y, int w, int h, int cols, int rows, const byte 
 		Com_Error(ERR_DROP, "Draw_StretchRaw: size not a power of 2: %i by %i", cols, rows);
 	}
 
-	RE_UploadCinematic( cols, rows, (byte*)data, client, dirty ); 
+	RE_UploadCinematic( cols, rows, (byte*)data, client, dirty );
 
 	if (r_speeds->integer) {
 		end = ri.Milliseconds() * ri.Cvar_VariableValue("timescale");
@@ -575,7 +606,7 @@ const void *RB_StretchPic ( const void *data ) {
 	shader_t *shader;
 
 	cmd = (const stretchPicCommand_t *)data;
-	
+
 	shader = cmd->shader;
 	if ( shader != tess.shader ) {
 		if ( tess.numIndexes ) {
@@ -592,13 +623,13 @@ const void *RB_StretchPic ( const void *data ) {
 	if ( !backEnd.projection2D )
 	{
 		vk_set_2d();
-	}	
+	}
 
 	if ( vk.bloomActive ) {
 		vk_bloom();
 	}
 
-	RB_AddQuadStamp2( cmd->x, cmd->y, cmd->w, cmd->h, cmd->s1, cmd->t1, 
+	RB_AddQuadStamp2( cmd->x, cmd->y, cmd->w, cmd->h, cmd->s1, cmd->t1,
 		cmd->s2, cmd->t2, backEnd.color2D );
 
 	return (const void *)(cmd + 1);
@@ -821,6 +852,43 @@ static void RB_LightingPass( void )
 }
 #endif
 
+static void vk_update_ghoul2_constants( const trRefdef_t *refdef ) {
+	uint32_t i;
+
+	if ( !vk.vboGhoul2Active )
+		return;
+
+	for ( i = 0; i < refdef->num_entities; i++ )
+	{
+		const trRefEntity_t *ent = &refdef->entities[i];
+		if (ent->e.reType != RT_MODEL)
+			continue;
+
+		model_t *model = R_GetModelByHandle(ent->e.hModel);
+		if (!model)
+			continue;
+
+		switch (model->type)
+		{
+		case MOD_MDXM:
+		case MOD_BAD:
+		{
+			// Transform Bones and upload them
+			RB_TransformBones( ent, refdef );
+		}
+		break;
+
+		default:
+			break;
+		}
+	}
+
+}
+static void RB_UpdateUniformConstants( const trRefdef_t *refdef, const viewParms_t *viewParms ) 
+{
+	vk_update_ghoul2_constants( refdef );
+}
+
 /*
 =============
 RB_DrawSurfs
@@ -843,6 +911,8 @@ const void	*RB_DrawSurfs( const void *data ) {
 #ifdef USE_VBO
 	VBO_UnBind();
 #endif
+
+	RB_UpdateUniformConstants( &backEnd.refdef, &backEnd.viewParms );
 
 	// clear the z buffer, set the modelview, etc
 	RB_BeginDrawingView();
@@ -883,16 +953,16 @@ const void	*RB_DrawSurfs( const void *data ) {
 	if ( vk.dglowActive && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && backEnd.hasGlowSurfaces )
 	{
 		vk_end_render_pass();
-		
+
 		backEnd.isGlowPass = qtrue;
 		vk_begin_dglow_extract_render_pass();
 
 		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
-		
+
 		vk_begin_dglow_blur();
 		backEnd.isGlowPass = qfalse;
 	}
-	
+
 	//TODO Maybe check for rdf_noworld stuff but q3mme has full 3d ui
 	backEnd.doneSurfaces = qtrue; // for bloom
 

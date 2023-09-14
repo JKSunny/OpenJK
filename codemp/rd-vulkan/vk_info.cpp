@@ -96,12 +96,12 @@ const char *vk_shadertype_string( Vk_Shader_Type code ) {
     static char buffer[32];
 
     switch (code) {
+        CASE_STR(TYPE_COLOR_BLACK);
         CASE_STR(TYPE_COLOR_WHITE);
         CASE_STR(TYPE_COLOR_GREEN);
         CASE_STR(TYPE_COLOR_RED);
         CASE_STR(TYPE_FOG_ONLY);
         CASE_STR(TYPE_DOT);
-
 
         CASE_STR(TYPE_SINGLE_TEXTURE_LIGHTING);
         CASE_STR(TYPE_SINGLE_TEXTURE_LIGHTING_LINEAR);
@@ -111,17 +111,33 @@ const char *vk_shadertype_string( Vk_Shader_Type code ) {
         CASE_STR(TYPE_SINGLE_TEXTURE);
         CASE_STR(TYPE_SINGLE_TEXTURE_ENV);
 
-        CASE_STR(TYPE_MULTI_TEXTURE_MUL2);
-        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_ENV);
+        CASE_STR(TYPE_SINGLE_TEXTURE_IDENTITY);
+        CASE_STR(TYPE_SINGLE_TEXTURE_IDENTITY_ENV);
+
+        CASE_STR(TYPE_SINGLE_TEXTURE_FIXED_COLOR);
+        CASE_STR(TYPE_SINGLE_TEXTURE_FIXED_COLOR_ENV);
+
         CASE_STR(TYPE_MULTI_TEXTURE_ADD2_IDENTITY);
         CASE_STR(TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV);
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_IDENTITY);
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV);
+
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR);
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV);
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR);
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV);
+
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2);
+        CASE_STR(TYPE_MULTI_TEXTURE_MUL2_ENV);
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD2_1_1);
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD2_1_1_ENV);
         CASE_STR(TYPE_MULTI_TEXTURE_ADD2);
         CASE_STR(TYPE_MULTI_TEXTURE_ADD2_ENV);
 
         CASE_STR(TYPE_MULTI_TEXTURE_MUL3);
         CASE_STR(TYPE_MULTI_TEXTURE_MUL3_ENV);
-        CASE_STR(TYPE_MULTI_TEXTURE_ADD3_IDENTITY);
-        CASE_STR(TYPE_MULTI_TEXTURE_ADD3_IDENTITY_ENV);
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD3_1_1);
+        CASE_STR(TYPE_MULTI_TEXTURE_ADD3_1_1_ENV);
         CASE_STR(TYPE_MULTI_TEXTURE_ADD3);
         CASE_STR(TYPE_MULTI_TEXTURE_ADD3_ENV);
 
@@ -424,14 +440,15 @@ void vk_info_f( void ) {
     ri.Printf(PRINT_ALL, "image chunks: %i\n", vk_world.num_image_chunks);
 
 #ifdef USE_VBO
-    const int vbo_mode = MIN( r_vbo->integer, 3 );
-    const char *vbo_mode_string[4] = { "off", "world", "world + models", "models" };
+    const int vbo_mode = MIN( r_vbo->integer, 2 );
+    const char *vbo_mode_string[4] = { "off", "world only", "world + models" };
+    const char *yesno[] = {"no ", "yes"};
 
     ri.Printf( PRINT_ALL, "VBO mode: %s\n", vbo_mode_string[vbo_mode] );
 
-    if ( r_vbo->integer ) {
-        ri.Printf( PRINT_ALL, "VBO buffers: %i, world index: %i\n", vk.vbo_count, vk.vbo_world_index );
-    }
+    if( vbo_mode == 2 )
+        ri.Printf( PRINT_ALL, "VBO model buffers: %i", tr.numVBOs );
+
 #endif
 #else
     ri.Printf(PRINT_ALL, "vk_info statistics are not enabled in this build.\n");

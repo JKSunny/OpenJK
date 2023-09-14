@@ -29,6 +29,7 @@ static uint32_t num_binds;
 static uint32_t num_attrs;
 #ifdef USE_VBO
 static qboolean is_ghoul2_vbo;
+static qboolean is_mdv_vbo;
 #endif
 
 static void vk_create_layout_binding( int binding, VkDescriptorType type, 
@@ -45,7 +46,7 @@ static void vk_create_layout_binding( int binding, VkDescriptorType type,
     bind[count].pImmutableSamplers = NULL;
     count++;
 #if defined(USE_VBO_GHOUL2)
-    if ( is_uniform ) {
+    if ( is_uniform && vk.vboGhoul2Active ) {
         bind[count].binding = binding + 1; // binding 1 
         bind[count].descriptorType = type;
         bind[count].descriptorCount = 1;
@@ -180,24 +181,33 @@ void vk_create_pipeline_layout( void )
     VK_SET_OBJECT_NAME(vk.pipeline_layout_blend, "pipeline layout - blend", VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_LAYOUT_EXT);
 }
 
+static uint32_t vk_bind_stride( uint32_t in ) 
+{
+    if ( is_ghoul2_vbo )
+        return get_mdxm_stride();
+
+    else if ( is_mdv_vbo )
+        return get_mdv_stride();
+
+    return in;
+}
+
 static void vk_push_bind( uint32_t binding, uint32_t stride )
 {
-#if defined(USE_VBO_GHOUL2)
-    if( is_ghoul2_vbo && ( binding == 1 || binding == 6 || binding == 7 ) )
+    if ( ( is_ghoul2_vbo || is_mdv_vbo ) && ( binding == 1 || binding == 6 || binding == 7 ) )
         return; // skip in_color bindings
-#endif
+
     bindings[num_binds].binding = binding;
-    bindings[num_binds].stride = stride;
+    bindings[num_binds].stride = vk_bind_stride( stride );
     bindings[num_binds].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     num_binds++;
 }
 
 static void vk_push_attr( uint32_t location, uint32_t binding, VkFormat format )
 {
-#if defined(USE_VBO_GHOUL2)
-    if( is_ghoul2_vbo && ( binding == 1 || binding == 6 || binding == 7 ) )
+    if ( ( is_ghoul2_vbo || is_mdv_vbo ) && ( binding == 1 || binding == 6 || binding == 7 ) )
         return; // skip in_color bindings
-#endif
+
     attribs[num_attrs].location = location;
     attribs[num_attrs].binding = binding;
     attribs[num_attrs].format = format;
@@ -211,9 +221,10 @@ static void vk_push_attr( uint32_t location, uint32_t binding, VkFormat format )
 // from memory throughout the vertices
 static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def ) {
     num_binds = num_attrs = 0; // reset
-#if defined(USE_VBO_GHOUL2)
+
     is_ghoul2_vbo = def->vbo_ghoul2;
-#endif
+    is_mdv_vbo = def->vbo_mdv;
+
     switch ( def->shader_type ) {
         case TYPE_FOG_ONLY:
         case TYPE_DOT:
@@ -221,22 +232,24 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
             break;
 
+        case TYPE_COLOR_BLACK:
         case TYPE_COLOR_WHITE:
         case TYPE_COLOR_GREEN:
         case TYPE_COLOR_RED:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
             break;
-
+        
+        case TYPE_SINGLE_TEXTURE_DF:
         case TYPE_SINGLE_TEXTURE_IDENTITY:
+        case TYPE_SINGLE_TEXTURE_FIXED_COLOR:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 2, sizeof( vec2_t ) );					// st0 array
             vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
             vk_push_attr( 2, 2, VK_FORMAT_R32G32_SFLOAT );
             break;
 
-        case TYPE_SINGLE_TEXTURE:
-        case TYPE_SINGLE_TEXTURE_DF:
+        case TYPE_SINGLE_TEXTURE: 
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
             vk_push_bind( 2, sizeof( vec2_t ) );					// st0 array
@@ -256,6 +269,14 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             vk_push_attr( 5, 5, VK_FORMAT_R32G32B32A32_SFLOAT );
             break;
 
+	    case TYPE_SINGLE_TEXTURE_IDENTITY_ENV:
+        case TYPE_SINGLE_TEXTURE_FIXED_COLOR_ENV:
+			vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
+			vk_push_bind( 5, sizeof( vec4_t ) );					// normals
+			vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+			vk_push_attr( 5, 5, VK_FORMAT_R32G32B32A32_SFLOAT );
+			break;
+
         case TYPE_SINGLE_TEXTURE_LIGHTING:
         case TYPE_SINGLE_TEXTURE_LIGHTING_LINEAR:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
@@ -266,8 +287,32 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             vk_push_attr( 2, 2, VK_FORMAT_R32G32B32A32_SFLOAT );
             break;
 
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY:
+		case TYPE_MULTI_TEXTURE_ADD2_IDENTITY:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR:
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR:
+			vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
+			vk_push_bind( 2, sizeof( vec2_t ) );					// st0 array
+			vk_push_bind( 3, sizeof( vec2_t ) );					// st1 array
+			vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+			vk_push_attr( 2, 2, VK_FORMAT_R32G32_SFLOAT );
+			vk_push_attr( 3, 3, VK_FORMAT_R32G32_SFLOAT );
+			break;
+
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV:
+		case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV:
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV:
+			vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
+			vk_push_bind( 3, sizeof( vec2_t ) );					// st1 array
+			vk_push_bind( 5, sizeof( vec4_t ) );					// normals
+			vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+			vk_push_attr( 3, 3, VK_FORMAT_R32G32_SFLOAT );
+			vk_push_attr( 5, 5, VK_FORMAT_R32G32B32A32_SFLOAT );
+			break;
+
         case TYPE_MULTI_TEXTURE_MUL2:
-        case TYPE_MULTI_TEXTURE_ADD2_IDENTITY:
+        case TYPE_MULTI_TEXTURE_ADD2_1_1:
         case TYPE_MULTI_TEXTURE_ADD2:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
@@ -280,7 +325,7 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             break;
 
         case TYPE_MULTI_TEXTURE_MUL2_ENV:
-        case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+        case TYPE_MULTI_TEXTURE_ADD2_1_1_ENV:
         case TYPE_MULTI_TEXTURE_ADD2_ENV:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
@@ -295,7 +340,7 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             break;
 
         case TYPE_MULTI_TEXTURE_MUL3:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY:
+        case TYPE_MULTI_TEXTURE_ADD3_1_1:
         case TYPE_MULTI_TEXTURE_ADD3:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
@@ -310,7 +355,7 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             break;
 
         case TYPE_MULTI_TEXTURE_MUL3_ENV:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY_ENV:
+        case TYPE_MULTI_TEXTURE_ADD3_1_1_ENV:
         case TYPE_MULTI_TEXTURE_ADD3_ENV:
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
@@ -420,7 +465,7 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
     }
 
 #if defined(USE_VBO_GHOUL2)
-    if( is_ghoul2_vbo ) {
+    if( is_ghoul2_vbo || is_mdv_vbo ) {
         if ( def->shader_type == TYPE_FOG_ONLY || 
              def->shader_type >= TYPE_GENERIC_BEGIN && def->shader_type <= TYPE_GENERIC_END )
         {
@@ -428,11 +473,17 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             switch ( def->shader_type ) {
                 case TYPE_FOG_ONLY:
                 case TYPE_SINGLE_TEXTURE_ENV:
+	            case TYPE_SINGLE_TEXTURE_IDENTITY_ENV:
+                case TYPE_SINGLE_TEXTURE_FIXED_COLOR_ENV:
+		        case TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV:
+		        case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+		        case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV:
+		        case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV:
                 case TYPE_MULTI_TEXTURE_MUL2_ENV:
-                case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+                case TYPE_MULTI_TEXTURE_ADD2_1_1_ENV:
                 case TYPE_MULTI_TEXTURE_ADD2_ENV:
                 case TYPE_MULTI_TEXTURE_MUL3_ENV:
-                case TYPE_MULTI_TEXTURE_ADD3_IDENTITY_ENV:
+                case TYPE_MULTI_TEXTURE_ADD3_1_1_ENV:
                 case TYPE_MULTI_TEXTURE_ADD3_ENV:
                 case TYPE_BLEND2_ADD_ENV:
                 case TYPE_BLEND2_MUL_ENV:
@@ -447,7 +498,7 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
                 case TYPE_BLEND3_ONE_MINUS_ALPHA_ENV:
                 case TYPE_BLEND3_MIX_ALPHA_ENV:
                 case TYPE_BLEND3_MIX_ONE_MINUS_ALPHA_ENV:
-                case TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV:  
+                case TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV:
                     break;
                 default:
                     vk_push_bind( 5, sizeof( vec4_t ) );    // normals
@@ -455,11 +506,14 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
                     break;
             }
 
-            vk_push_bind( 8, sizeof( uvec4_t ) );		// bone indexes
-            vk_push_attr( 8, 8, VK_FORMAT_R32G32B32A32_UINT );
+            if ( is_ghoul2_vbo ) 
+            {
+                vk_push_bind( 8, sizeof( vec4_t ) );		// bone indexes
+                vk_push_attr( 8, 8, VK_FORMAT_R8G8B8A8_UINT );
 
-            vk_push_bind( 9, sizeof( vec4_t ) );		// bone weights
-            vk_push_attr( 9, 9, VK_FORMAT_R32G32B32A32_SFLOAT );
+                vk_push_bind( 9, sizeof( vec4_t ) );		// bone weights
+                vk_push_attr( 9, 9, VK_FORMAT_R8G8B8A8_UNORM );
+            }
         }
     }
 #endif
@@ -563,13 +617,8 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     VkPipelineDynamicStateCreateInfo dynamic_state;
     VkDynamicState dynamic_state_array[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS };
     VkGraphicsPipelineCreateInfo create_info;
-#ifdef USE_VBO_GHOUL2_RGBAGEN_CONSTS
-    int32_t vert_spec_data[3];
-#else
-    int32_t vert_spec_data[1]; // clipping (def->clipping_plane). NULL
-#endif
-    
-    VkSpecializationInfo vert_spec_info;
+    //int32_t vert_spec_data[1]; // clipping (def->clipping_plane). NULL  
+    //VkSpecializationInfo vert_spec_info;
     struct FragSpecData {
         int32_t alpha_test_func; 
         float   alpha_test_value;
@@ -580,14 +629,18 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
         int32_t tex_mode;
         int32_t discard_mode;
         float   identity_color;
+        float   identity_alpha;
+        int32_t acff;
     } frag_spec_data; 
-    VkSpecializationMapEntry spec_entries[10];
+    VkSpecializationMapEntry spec_entries[12];
     VkSpecializationInfo frag_spec_info;
     VkBool32 alphaToCoverage = VK_FALSE;
     unsigned int atest_bits;
     unsigned int state_bits = def->state_bits;
 
-    const int vbo = def->vbo_ghoul2 ? 1 : 0; // 0: generic, 1: ghoul2-vbo
+    int vbo = 0;
+    if ( def->vbo_ghoul2 )  vbo = 1;
+    if ( def->vbo_mdv )     vbo = 2;
 
     switch ( def->shader_type ) {
         case TYPE_SINGLE_TEXTURE_LIGHTING:
@@ -602,14 +655,19 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
 
         case TYPE_SINGLE_TEXTURE_DF:
             state_bits |= GLS_DEPTHMASK_TRUE;
-            vs_module = &vk.shaders.vert.gen[0][0][0][0][0];    // need compatible fragment shader too?
+            vs_module = &vk.shaders.vert.ident1[vbo][0][0][0];    // need compatible fragment shader too?
             fs_module = &vk.shaders.frag.gen0_df;
             break;
 
-        case TYPE_SINGLE_TEXTURE_IDENTITY:
-            vs_module = &vk.shaders.vert.gen0_ident;
-            fs_module = &vk.shaders.frag.gen0_ident;
-            break;
+		case TYPE_SINGLE_TEXTURE_FIXED_COLOR:
+			vs_module = &vk.shaders.vert.fixed[vbo][0][0][0];
+			fs_module = &vk.shaders.frag.fixed[vbo][0][0];
+			break;
+
+		case TYPE_SINGLE_TEXTURE_FIXED_COLOR_ENV:
+			vs_module = &vk.shaders.vert.fixed[vbo][0][1][0];
+			fs_module = &vk.shaders.frag.fixed[vbo][0][0];
+			break;
 
         case TYPE_SINGLE_TEXTURE:
             vs_module = &vk.shaders.vert.gen[vbo][0][0][0][0];
@@ -621,29 +679,63 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             fs_module = &vk.shaders.frag.gen[vbo][0][0][0];
             break;
 
+		case TYPE_SINGLE_TEXTURE_IDENTITY:
+			vs_module = &vk.shaders.vert.ident1[vbo][0][0][0];
+			fs_module = &vk.shaders.frag.ident1[vbo][0][0];
+			break;
+
+		case TYPE_SINGLE_TEXTURE_IDENTITY_ENV:
+			vs_module = &vk.shaders.vert.ident1[vbo][0][1][0];
+			fs_module = &vk.shaders.frag.ident1[vbo][0][0];
+			break;
+
+		case TYPE_MULTI_TEXTURE_ADD2_IDENTITY:
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY:
+			vs_module = &vk.shaders.vert.ident1[vbo][1][0][0];
+			fs_module = &vk.shaders.frag.ident1[vbo][1][0];
+			break;
+
+		case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV:
+			vs_module = &vk.shaders.vert.ident1[vbo][1][1][0];
+			fs_module = &vk.shaders.frag.ident1[vbo][1][0];
+			break;
+
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR:
+			vs_module = &vk.shaders.vert.fixed[vbo][1][0][0];
+			fs_module = &vk.shaders.frag.fixed[vbo][1][0];
+			break;
+
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV:
+			vs_module = &vk.shaders.vert.fixed[vbo][1][1][0];
+			fs_module = &vk.shaders.frag.fixed[vbo][1][0];
+			break;
+
         case TYPE_MULTI_TEXTURE_MUL2:
-        case TYPE_MULTI_TEXTURE_ADD2_IDENTITY:
+        case TYPE_MULTI_TEXTURE_ADD2_1_1:
         case TYPE_MULTI_TEXTURE_ADD2:
             vs_module = &vk.shaders.vert.gen[vbo][1][0][0][0];
             fs_module = &vk.shaders.frag.gen[vbo][1][0][0];
             break;
 
         case TYPE_MULTI_TEXTURE_MUL2_ENV:
-        case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
+        case TYPE_MULTI_TEXTURE_ADD2_1_1_ENV:
         case TYPE_MULTI_TEXTURE_ADD2_ENV:
             vs_module = &vk.shaders.vert.gen[vbo][1][0][1][0];
             fs_module = &vk.shaders.frag.gen[vbo][1][0][0];
             break;
 
         case TYPE_MULTI_TEXTURE_MUL3:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY:
+        case TYPE_MULTI_TEXTURE_ADD3_1_1:
         case TYPE_MULTI_TEXTURE_ADD3:
             vs_module = &vk.shaders.vert.gen[vbo][2][0][0][0];
             fs_module = &vk.shaders.frag.gen[vbo][2][0][0];
             break;
 
         case TYPE_MULTI_TEXTURE_MUL3_ENV:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY_ENV:
+        case TYPE_MULTI_TEXTURE_ADD3_1_1_ENV:
         case TYPE_MULTI_TEXTURE_ADD3_ENV:
             vs_module = &vk.shaders.vert.gen[vbo][2][0][1][0];
             fs_module = &vk.shaders.frag.gen[vbo][2][0][0];
@@ -693,6 +785,7 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             fs_module = &vk.shaders.frag.gen[vbo][2][1][0];
             break;
 
+        case TYPE_COLOR_BLACK:
         case TYPE_COLOR_WHITE:
         case TYPE_COLOR_GREEN:
         case TYPE_COLOR_RED:
@@ -701,7 +794,8 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             break;
 
         case TYPE_FOG_ONLY:
-            vs_module = &vk.shaders.fog_vs[vbo];
+            // ghoul2 requires strides & bones, mdv only strides
+            vs_module = &vk.shaders.fog_vs[ def->vbo_ghoul2 ? 1 : 0 ]; 
             fs_module = &vk.shaders.fog_fs;
             break;
 
@@ -720,7 +814,7 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             case TYPE_FOG_ONLY:
             case TYPE_DOT:
             case TYPE_SINGLE_TEXTURE_DF:
-            case TYPE_SINGLE_TEXTURE_IDENTITY:
+            case TYPE_COLOR_BLACK:
             case TYPE_COLOR_WHITE:
             case TYPE_COLOR_GREEN:
             case TYPE_COLOR_RED:
@@ -738,15 +832,8 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     set_shader_stage_desc( shader_stages + 0, VK_SHADER_STAGE_VERTEX_BIT, *vs_module, "main" );
     set_shader_stage_desc( shader_stages + 1, VK_SHADER_STAGE_FRAGMENT_BIT, *fs_module, "main" );
 
-    Com_Memset( vert_spec_data, 0, sizeof(vert_spec_data) ); // clipping
+    //Com_Memset( vert_spec_data, 0, sizeof(vert_spec_data) ); // clipping
     Com_Memset( &frag_spec_data, 0, sizeof(FragSpecData) );   
-#ifdef USE_VBO_GHOUL2_RGBAGEN_CONSTS
-    vert_spec_data[0] = def->rgbaGen[0]; // used by ghoul2-vbo vertex shader.
-    vert_spec_data[1] = def->rgbaGen[1]; // used by ghoul2-vbo vertex shader.
-    vert_spec_data[2] = def->rgbaGen[2]; // used by ghoul2-vbo vertex shader.
-#else
-    //vert_spec_data[0] = def->clipping_plane ? 1 : 0; // used by vertex shader.   
-#endif
 
     // fragment shader specialization data
     atest_bits = state_bits & GLS_ATEST_BITS;
@@ -785,8 +872,9 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     // constant color
     switch ( def->shader_type ) {
         default: frag_spec_data.color_mode = 0; break;
-        case TYPE_COLOR_GREEN: frag_spec_data.color_mode = 1; break;
-        case TYPE_COLOR_RED:   frag_spec_data.color_mode = 2; break;
+        case TYPE_COLOR_WHITE: frag_spec_data.color_mode = 1; break;
+        case TYPE_COLOR_GREEN: frag_spec_data.color_mode = 2; break;
+        case TYPE_COLOR_RED:   frag_spec_data.color_mode = 3; break;
     }
 
     // abs lighting
@@ -800,6 +888,10 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
 
     // multitexture mode
     switch ( def->shader_type ) {
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY:
+		case TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR:
+		case TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV:
         case TYPE_MULTI_TEXTURE_MUL2:
         case TYPE_MULTI_TEXTURE_MUL2_ENV:
         case TYPE_MULTI_TEXTURE_MUL3:
@@ -813,8 +905,12 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
 
         case TYPE_MULTI_TEXTURE_ADD2_IDENTITY:
         case TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY:
-        case TYPE_MULTI_TEXTURE_ADD3_IDENTITY_ENV:
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR:
+		case TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV:
+		case TYPE_MULTI_TEXTURE_ADD2_1_1:
+		case TYPE_MULTI_TEXTURE_ADD2_1_1_ENV:
+		case TYPE_MULTI_TEXTURE_ADD3_1_1:
+		case TYPE_MULTI_TEXTURE_ADD3_1_1_ENV:
             frag_spec_data.tex_mode = 1;
             break;
 
@@ -868,11 +964,20 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             break;
     }
         
-    frag_spec_data.identity_color = tr.identityLight;
+    //frag_spec_data.identity_color = tr.identityLight;
+    frag_spec_data.identity_color = ((float)def->color.rgb) / 255.0;
+	frag_spec_data.identity_alpha = ((float)def->color.alpha) / 255.0;
+
+	if ( def->fog_stage ) {
+		frag_spec_data.acff = def->acff;
+	} else {
+		frag_spec_data.acff = 0;
+	}
 
 	//
 	// vertex module specialization data
 	//
+ #if 0
     spec_entries[0].constantID = 0; // clip_plane
     spec_entries[0].offset = 0 * sizeof( int32_t );
     spec_entries[0].size = sizeof( int32_t );
@@ -882,6 +987,7 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     vert_spec_info.dataSize = ARRAY_LEN( vert_spec_data ) * sizeof( int32_t );
     vert_spec_info.pData = &vert_spec_data[0];
     shader_stages[0].pSpecializationInfo = &vert_spec_info;
+#endif
 
     //
     // fragment module specialization data
@@ -922,7 +1028,15 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     spec_entries[9].offset = offsetof(struct FragSpecData, identity_color);
     spec_entries[9].size = sizeof(frag_spec_data.identity_color);
 
-    frag_spec_info.mapEntryCount = 9;
+    spec_entries[10].constantID = 9;
+    spec_entries[10].offset = offsetof(struct FragSpecData, identity_alpha);
+    spec_entries[10].size = sizeof(frag_spec_data.identity_alpha);
+
+    spec_entries[11].constantID = 10;
+    spec_entries[11].offset = offsetof(struct FragSpecData, acff);
+    spec_entries[11].size = sizeof(frag_spec_data.acff);
+
+    frag_spec_info.mapEntryCount = 11;
     frag_spec_info.pMapEntries = spec_entries + 1;
     frag_spec_info.dataSize = sizeof( frag_spec_data );
     frag_spec_info.pData = &frag_spec_data;
@@ -1718,7 +1832,9 @@ void vk_alloc_persistent_pipelines( void )
     vk_debug("Create skybox pipeline \n");
     {
         Com_Memset(&def, 0, sizeof(def));
-        def.shader_type = TYPE_SINGLE_TEXTURE_IDENTITY;
+        def.shader_type = TYPE_SINGLE_TEXTURE_FIXED_COLOR;
+		def.color.rgb = tr.identityLightByte;
+		def.color.alpha = tr.identityLightByte;
         def.face_culling = CT_FRONT_SIDED;
         def.polygon_offset = qfalse;
         def.mirror = qfalse;
@@ -1814,11 +1930,18 @@ void vk_alloc_persistent_pipelines( void )
 #endif
                     def.state_bits = fog_state;
                     def.vbo_ghoul2 = qfalse;
+                    def.vbo_mdv = qfalse;
                     vk.std_pipeline.fog_pipelines[0][i][j][k] = vk_find_pipeline_ext(0, &def, qtrue);
-#if defined(USE_VBO_GHOUL2)                    
+#if defined(USE_VBO_GHOUL2) || defined(USE_VBO_MDV)                     
                     if( vk.vboGhoul2Active ) {
                         def.vbo_ghoul2 = qtrue;
                         vk.std_pipeline.fog_pipelines[1][i][j][k] = vk_find_pipeline_ext(0, &def, qtrue);
+                    }
+
+                    if ( vk.vboMdvActive ) {
+                        def.vbo_ghoul2 = qfalse;
+                        def.vbo_mdv = qtrue;
+                        vk.std_pipeline.fog_pipelines[2][i][j][k] = vk_find_pipeline_ext(0, &def, qtrue);
                     }
 #endif
                    // def.shader_type = TYPE_SINGLE_TEXTURE;
@@ -1830,7 +1953,8 @@ void vk_alloc_persistent_pipelines( void )
 #ifdef USE_PMLIGHT
         def.state_bits = GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
         def.vbo_ghoul2 = qfalse;
-        //def.shader_type = TYPE_SIGNLE_TEXTURE_LIGHTING;
+        def.vbo_mdv = qfalse;
+        //def.shader_type = TYPE_SINGLE_TEXTURE_LIGHTING;
         for (i = 0; i < 3; i++) { // cullType
             def.face_culling = (cullType_t)i;
             for (j = 0; j < 2; j++) { // polygonOffset
@@ -2040,7 +2164,7 @@ void vk_update_post_process_pipelines( void )
     }
 }
 
-void vk_destroy_pipelines( qboolean reset )
+void vk_destroy_pipelines( qboolean resetCounter )
 {
     uint32_t i, j;
 
@@ -2056,7 +2180,7 @@ void vk_destroy_pipelines( qboolean reset )
 
     }
 
-    if ( reset ) {
+    if ( resetCounter ) {
         Com_Memset( &vk.pipelines, 0, sizeof(vk.pipelines) );
         vk.pipelines_count = 0;
     }
