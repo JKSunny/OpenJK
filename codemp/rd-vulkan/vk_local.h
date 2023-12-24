@@ -68,6 +68,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 //#define USE_VANILLA_SHADOWFINISH
 #define USE_VK_STATS
 
+#define	REFRACTION_EXTRACT_SCALE		2
 #define NUM_COMMAND_BUFFERS				2
 #define VK_NUM_BLUR_PASSES				4
 
@@ -178,6 +179,7 @@ typedef enum {
 	TYPE_COLOR_RED,
 	TYPE_FOG_ONLY,
 	TYPE_DOT,
+	TYPE_REFRACTION,
 
 	TYPE_SINGLE_TEXTURE_LIGHTING,
 	TYPE_SINGLE_TEXTURE_LIGHTING_LINEAR,
@@ -410,6 +412,7 @@ typedef enum {
 	RENDER_PASS_MAIN,
 	RENDER_PASS_POST_BLEND,
 	RENDER_PASS_DGLOW,
+	RENDER_PASS_REFRACTION,
 	RENDER_PASS_COUNT
 } renderPass_t;
 
@@ -442,37 +445,88 @@ typedef struct VK_Pipeline {
 	VkPipeline		handle[RENDER_PASS_COUNT];
 } VK_Pipeline_t;
 
+typedef struct vktcMod_s {
+	vec4_t	matrix;
+	vec4_t	offTurb;
+} vktcMod_t;
+
+typedef struct vktcGen_s {
+	vec3_t	vector0;
+	int32_t	pad0;
+	vec3_t	vector1;
+	int32_t	type;
+} vktcGen_t;
+
 // this structure must be in sync with shader uniforms!
 typedef struct vkUniform_s {
-	// vertex shader reference
+	// light/env/material parameters:
 	vec4_t eyePos;
 	vec4_t lightPos;
-
-	// vertex - fog parameters
-	vec4_t fogDistanceVector;
-	vec4_t fogDepthVector;
-	vec4_t fogEyeT;
-
-	// fragment shader reference
 	vec4_t lightColor; // rgb + 1/(r*r)
-	vec4_t fogColor;
-
-	// fragment - linear dynamic light
 	vec4_t lightVector;
+
+	// fog parameters:
+	union {
+		struct {
+			vec4_t fogDistanceVector;
+			vec4_t fogDepthVector;
+			vec4_t fogEyeT;
+			vec4_t fogColor;
+		} fog;
+
+		struct {
+			vktcMod_t tcMod;
+			vktcGen_t tcGen;
+		} refraction;
+	};
+
+	mat4_t	modelMatrix;
 } vkUniform_t;
 
 #ifdef USE_VBO_GHOUL2
+typedef struct vkBundle_s {
+	vec4_t		baseColor;
+	vec4_t		vertColor;
+	vktcMod_t	tcMod;
+	vktcGen_t	tcGen;
+	int32_t		rgbGen;
+	int32_t		alphaGen;
+	int32_t		numTexMods;	// make this to a specialization constant
+	int32_t		pad0;
+} vkBundle_t;
+
+typedef struct vkDisintegration_s {
+	vec3_t	origin;
+	float	threshold;
+} vkDisintegration_t;
+
+typedef struct vkDeform_s {
+	float	base;
+	float	amplitude;
+	float	phase;
+	float	frequency;
+
+	vec3_t	vector;
+	float	time;
+
+	int32_t	type;
+	int32_t	func;
+	vec2_t	pad0;
+} vkDeform_t;
+
 typedef struct vkUniformData_s {
-	vec4_t eyePos;
-	vec4_t ambientLight;
-	vec4_t directedLight;
-	vec4_t lightDir;
-	vec4_t rgbGen; 
-	vec4_t alphaGen;
-	vec4_t baseColor[3];
-	vec4_t vertColor[3];
-	vec4_t disintegrationInfo;
-	vec4_t deformInfo[3];
+	vec4_t				localViewOrigin;
+	vec4_t				ambientLight;
+	vec4_t				directedLight;
+	vec4_t				lightDir;
+
+	vkBundle_t			bundle[3];
+	vkDisintegration_t	disintegration;
+	vkDeform_t			deform;
+
+	float				portalRange;
+	vec3_t				pad0;
+
 	mat4_t modelMatrix;
 } vkUniformData_t;
 
@@ -555,7 +609,6 @@ typedef struct vk_tess_s {
 	VkDeviceSize		indirect_buffer_offset;
 
 	VkDescriptorSet		uniform_descriptor;
-	uint32_t			uniform_read_offset;
 	VkDeviceSize		buf_offset[8];
 	VkDeviceSize		vbo_offset[10];
 
@@ -626,6 +679,10 @@ typedef struct {
 	VkImage			color_image;
 	VkImageView		color_image_view;
 	
+	VkImage			refraction_extract_image;
+	VkImageView		refraction_extract_image_view;
+	VkDescriptorSet	refraction_extract_descriptor;
+
 	VkImage			bloom_image[1 + VK_NUM_BLUR_PASSES * 2];
 	VkImageView		bloom_image_view[1 + VK_NUM_BLUR_PASSES * 2];
 
@@ -658,6 +715,10 @@ typedef struct {
 		VkRenderPass capture;
 
 		struct {
+			VkRenderPass extract;
+		} refraction;
+
+		struct {
 			VkRenderPass blur[VK_NUM_BLUR_PASSES * 2];
 			VkRenderPass extract;
 			VkRenderPass blend;
@@ -675,12 +736,17 @@ typedef struct {
 		VkImageView image_view;
 	} capture;
 
+
 	// framebuffers
 	struct {
 		VkFramebuffer main[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;
+		
+		struct {
+			VkFramebuffer extract;
+		} refraction;
 
 		struct {
 			VkFramebuffer blur[VK_NUM_BLUR_PASSES * 2];
@@ -738,6 +804,8 @@ typedef struct {
 	VkPipeline dglow_blur_pipeline[VK_NUM_BLUR_PASSES * 2]; // horizontal & vertical pairs
 	VkPipeline dglow_blend_pipeline;
 
+	VkPipeline refraction_capture_pipeline;
+
 	// Standard pipeline(s)
 	struct  {
 		uint32_t skybox_pipeline;
@@ -791,6 +859,8 @@ typedef struct {
 	} storage;
 
 	uint32_t storage_alignment;
+	uint32_t uniform_alignment;
+
 	uint32_t uniform_item_size;
 
 #ifdef USE_VBO_GHOUL2
@@ -800,7 +870,6 @@ typedef struct {
 	uint32_t ghoul2_vbo_stride;
 	uint32_t mdv_vbo_stride;
 #endif
-	uint32_t uniform_alignment;
 
 	// shader modules.
 	struct {
@@ -834,6 +903,9 @@ typedef struct {
 		VkShaderModule bloom_fs;
 		VkShaderModule blur_fs;
 		VkShaderModule blend_fs;
+
+		VkShaderModule refraction_vs[3];
+		VkShaderModule refraction_fs;
 	} shaders;
 
 	uint32_t frame_count;
@@ -866,6 +938,7 @@ typedef struct {
 	qboolean msaaActive;
 	qboolean bloomActive;
 	qboolean dglowActive;
+	qboolean refractionActive;
 
 	qboolean	offscreenRender;
 	qboolean	windowAdjusted;
@@ -920,8 +993,6 @@ qboolean	R_CanMinimize( void );
 
 // pipeline
 void		vk_create_pipelines(void);
-void		vk_create_bloom_pipelines( void );
-void		vk_create_dglow_pipelines( void );
 void		vk_alloc_persistent_pipelines( void );
 void		vk_create_descriptor_layout( void );
 void		vk_create_pipeline_layout( void );
@@ -1012,7 +1083,7 @@ VkPipeline	vk_gen_pipeline( uint32_t index );
 void		vk_end_render_pass( void );
 void		vk_begin_main_render_pass( void );
 void		vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
-uint32_t	vk_append_uniform( void *uniform, size_t size, uint32_t min_offset );
+uint32_t	vk_append_uniform( const void *uniform, size_t size, uint32_t min_offset );
 
 // image process
 void		GetScaledDimension( const unsigned int width, const unsigned int height, 
@@ -1040,6 +1111,10 @@ void		vk_begin_post_blend_render_pass( VkRenderPass renderpass, qboolean clearVa
 void		vk_begin_bloom_extract_render_pass( void );
 void		vk_begin_bloom_blur_render_pass( uint32_t index );
 qboolean	vk_bloom( void );
+
+// refraction
+void		vk_refraction_extract( void );
+void		vk_begin_post_refraction_extract_render_pass( void );
 
 // dynamic glow
 void		vk_begin_dglow_extract_render_pass( void );

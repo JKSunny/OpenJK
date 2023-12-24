@@ -239,7 +239,18 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
             vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
             vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
             break;
-        
+
+        case TYPE_REFRACTION:
+            vk_push_bind( 0, sizeof( vec4_t ) );					// xyz array
+            vk_push_bind( 1, sizeof( color4ub_t ) );				// color array
+            vk_push_bind( 2, sizeof( vec2_t ) );					// st0 array
+            vk_push_bind( 5, sizeof( vec4_t ) );					// normals
+            vk_push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+            vk_push_attr( 1, 1, VK_FORMAT_R8G8B8A8_UNORM );
+            vk_push_attr( 2, 2, VK_FORMAT_R32G32_SFLOAT );
+			vk_push_attr( 5, 5, VK_FORMAT_R32G32B32A32_SFLOAT );
+            break;
+
         case TYPE_SINGLE_TEXTURE_DF:
         case TYPE_SINGLE_TEXTURE_IDENTITY:
         case TYPE_SINGLE_TEXTURE_FIXED_COLOR:
@@ -465,12 +476,13 @@ static void vk_push_vertex_input_binding_attribute( const Vk_Pipeline_Def *def )
     }
 
 #if defined(USE_VBO_GHOUL2)
-    if( is_ghoul2_vbo || is_mdv_vbo ) {
-        if ( def->shader_type == TYPE_FOG_ONLY || 
-             def->shader_type >= TYPE_GENERIC_BEGIN && def->shader_type <= TYPE_GENERIC_END )
+    if ( is_ghoul2_vbo || is_mdv_vbo ) {
+        if ( ( def->shader_type == TYPE_FOG_ONLY || def->shader_type == TYPE_REFRACTION ) || 
+             ( def->shader_type >= TYPE_GENERIC_BEGIN && def->shader_type <= TYPE_GENERIC_END ) )
         {
             // bind attributes for fog and generic gpu shading shaders
             switch ( def->shader_type ) {
+                case TYPE_REFRACTION:
                 case TYPE_FOG_ONLY:
                 case TYPE_SINGLE_TEXTURE_ENV:
 	            case TYPE_SINGLE_TEXTURE_IDENTITY_ENV:
@@ -643,6 +655,10 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
     if ( def->vbo_mdv )     vbo = 2;
 
     switch ( def->shader_type ) {
+        case TYPE_REFRACTION:
+            vs_module = &vk.shaders.refraction_vs[vbo];
+            fs_module = &vk.shaders.refraction_fs;
+        break;
         case TYPE_SINGLE_TEXTURE_LIGHTING:
             vs_module = &vk.shaders.vert.light[0];
             fs_module = &vk.shaders.frag.light[0][0];
@@ -818,6 +834,7 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
             case TYPE_COLOR_WHITE:
             case TYPE_COLOR_GREEN:
             case TYPE_COLOR_RED:
+            case TYPE_REFRACTION:
                 break;
             default:
                 // switch to fogged modules
@@ -1257,6 +1274,8 @@ VkPipeline vk_create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPa
 
     if ( renderPassIndex == RENDER_PASS_SCREENMAP )
         create_info.renderPass = vk.render_pass.screenmap;
+    else if ( renderPassIndex == RENDER_PASS_REFRACTION )
+        create_info.renderPass = vk.render_pass.refraction.extract;
     else
         create_info.renderPass = vk.render_pass.main;
 
@@ -1285,7 +1304,7 @@ static void vk_create_post_process_pipeline( int program_index, uint32_t width, 
     VkGraphicsPipelineCreateInfo create_info;
     VkViewport viewport;
     VkRect2D scissor;
-    VkSpecializationMapEntry spec_entries[9];
+    VkSpecializationMapEntry spec_entries[11];
     VkSpecializationInfo frag_spec_info;
     VkPipeline *pipeline;
     VkShaderModule fs_module;
@@ -1300,6 +1319,8 @@ static void vk_create_post_process_pipeline( int program_index, uint32_t width, 
         float greyscale;
         float bloom_threshold;
         float bloom_intensity;
+        int bloom_threshold_mode;
+        int bloom_modulate;
         int dither;
         int depth_r;
         int depth_g;
@@ -1390,6 +1411,8 @@ static void vk_create_post_process_pipeline( int program_index, uint32_t width, 
     frag_spec_data.greyscale = r_greyscale->value;
     frag_spec_data.bloom_threshold = r_bloom_threshold->value;
     frag_spec_data.bloom_intensity = r_bloom_intensity->value;
+    frag_spec_data.bloom_threshold_mode = r_bloom_threshold_mode->integer;
+    frag_spec_data.bloom_modulate = r_bloom_modulate->integer;
     frag_spec_data.dither = r_dither->integer;
 
     if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
@@ -1416,22 +1439,30 @@ static void vk_create_post_process_pipeline( int program_index, uint32_t width, 
     spec_entries[4].size = sizeof(frag_spec_data.bloom_intensity);
 
     spec_entries[5].constantID = 5;
-    spec_entries[5].offset = offsetof(struct FragSpecData, dither);
-    spec_entries[5].size = sizeof(frag_spec_data.dither);
+    spec_entries[5].offset = offsetof( struct FragSpecData, bloom_threshold_mode );
+    spec_entries[5].size = sizeof( frag_spec_data.bloom_threshold_mode );
 
     spec_entries[6].constantID = 6;
-    spec_entries[6].offset = offsetof(struct FragSpecData, depth_r);
-    spec_entries[6].size = sizeof(frag_spec_data.depth_r);
+    spec_entries[6].offset = offsetof( struct FragSpecData, bloom_modulate );
+    spec_entries[6].size = sizeof( frag_spec_data.bloom_modulate );
 
     spec_entries[7].constantID = 7;
-    spec_entries[7].offset = offsetof(struct FragSpecData, depth_g);
-    spec_entries[7].size = sizeof(frag_spec_data.depth_g);
+    spec_entries[7].offset = offsetof(struct FragSpecData, dither);
+    spec_entries[7].size = sizeof(frag_spec_data.dither);
 
     spec_entries[8].constantID = 8;
-    spec_entries[8].offset = offsetof(struct FragSpecData, depth_b);
-    spec_entries[8].size = sizeof(frag_spec_data.depth_b);
+    spec_entries[8].offset = offsetof(struct FragSpecData, depth_r);
+    spec_entries[8].size = sizeof(frag_spec_data.depth_r);
 
-    frag_spec_info.mapEntryCount = 9;
+    spec_entries[9].constantID = 9;
+    spec_entries[9].offset = offsetof(struct FragSpecData, depth_g);
+    spec_entries[9].size = sizeof(frag_spec_data.depth_g);
+
+    spec_entries[10].constantID = 10;
+    spec_entries[10].offset = offsetof(struct FragSpecData, depth_b);
+    spec_entries[10].size = sizeof(frag_spec_data.depth_b);
+
+    frag_spec_info.mapEntryCount = 11;
     frag_spec_info.pMapEntries = spec_entries;
     frag_spec_info.dataSize = sizeof(frag_spec_data);
     frag_spec_info.pData = &frag_spec_data;
@@ -2106,12 +2137,9 @@ void vk_create_pipelines( void )
     vk_alloc_persistent_pipelines();
 
     vk.pipelines_world_base = vk.pipelines_count;
-
-    vk_create_bloom_pipelines();
-    vk_create_dglow_pipelines();
 }
 
-void vk_create_bloom_pipelines( void )
+static void vk_create_bloom_pipelines( void )
 {
     if ( !vk.bloomActive )
         return;
@@ -2132,7 +2160,7 @@ void vk_create_bloom_pipelines( void )
     vk_create_post_process_pipeline( 2, glConfig.vidWidth, glConfig.vidHeight ); // post process blending
 }
 
-void vk_create_dglow_pipelines( void )
+static void vk_create_dglow_pipelines( void )
 {
     if ( !vk.dglowActive )
         return;
@@ -2161,6 +2189,9 @@ void vk_update_post_process_pipelines( void )
             // update capture pipeline
             vk_create_post_process_pipeline( 3, gls.captureWidth, gls.captureHeight );
         }
+
+        vk_create_bloom_pipelines();
+        vk_create_dglow_pipelines();
     }
 }
 
