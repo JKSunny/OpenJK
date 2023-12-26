@@ -24,6 +24,8 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #ifndef TR_LOCAL_H
 #define TR_LOCAL_H
 
+#define USE_OPENJK
+
 #define USE_VBO					// store static world geometry in VBO
 
 #ifdef USE_VBO
@@ -205,6 +207,13 @@ typedef struct orientationr_s {
 	float		modelViewMatrix[16];
 	float		modelMatrix[16];
 } orientationr_t;
+
+typedef struct textureMode_s {
+	const char *name;
+	int	minimize, maximize;
+} textureMode_t;
+
+extern	int	gl_filter_min, gl_filter_max;
 
 typedef enum
 {
@@ -1258,8 +1267,6 @@ the bits are allocated as follows:
 #endif
 #define QSORT_REFENTITYNUM_MASK ( REFENTITYNUM_MASK << QSORT_REFENTITYNUM_SHIFT )
 
-extern	int	gl_filter_min, gl_filter_max;
-
 /*
 ** performanceCounters_t
 */
@@ -1825,7 +1832,6 @@ void		R_RotateForEntity( const trRefEntity_t *ent, const viewParms_t *viewParms,
 void		RE_StretchRaw ( int x, int y, int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty );
 void		RE_UploadCinematic( int cols, int rows, const byte *data, int client, qboolean dirty );
 
-void		RE_BeginFrame( stereoFrame_t stereoFrame );
 void		RE_BeginRegistration( glconfig_t *glconfig );
 void		R_ColorShiftLightingBytes( const byte in[4], byte out[4], qboolean hasAlpha ); //rwwRMG - added
 void		RE_LoadWorldMap( const char *mapname );
@@ -1856,6 +1862,7 @@ void    	R_Init( void );
 image_t		*R_FindImageFile( const char *name, imgFlags_t flags );
 image_t		*R_CreateImage( const char *name, byte *pic, int width, int height, imgFlags_t flags );
 
+textureMode_t *GetTextureMode( const char *name );
 qboolean	R_GetModeInfo( int *width, int *height, int mode );
 
 void		R_SetColorMappings( void );

@@ -217,7 +217,9 @@ int R_ComputeLOD( trRefEntity_t *ent ) {
 #ifdef RF_NOLOD
 	if (!(ent->e.renderfx & RF_NOLOD))
 #endif
+	{
 		lod += r_lodbias->integer;
+	}
 
 	if ( lod >= tr.currentModel->numLods )
 		lod = tr.currentModel->numLods - 1;
