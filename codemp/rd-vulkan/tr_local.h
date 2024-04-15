@@ -719,7 +719,6 @@ typedef struct trRefdef_s {
 
 	int					num_entities;
 	trRefEntity_t		*entities;
-	trMiniRefEntity_t	*miniEntities;
 
 	int					num_dlights;
 	struct dlight_s		*dlights;
@@ -743,10 +742,22 @@ typedef struct trRefdef_s {
 //=================================================================================
 
 // skins allow models to be retextured without modifying the model file
-typedef struct skinSurface_s {
+#if 0
+// this isn't done yet in OpenJK master
+typedef struct {
 	char		name[MAX_QPATH];
 	shader_t	*shader;
 } skinSurface_t;
+
+
+typedef struct skin_s {
+	char			name[MAX_QPATH];		// game path, including extension
+	int				numSurfaces;
+	skinSurface_t	*surfaces[128];
+} skin_t;
+#else
+typedef _skinSurface_t skinSurface_t;
+#endif
 
 typedef struct fog_s {
 	int				originalBrushNumber;
@@ -1758,6 +1769,7 @@ extern	cvar_t	*r_marksOnTriangleMeshes;
 
 extern	cvar_t	*r_aspectCorrectFonts;
 extern	cvar_t	*cl_ratioFix;
+extern cvar_t	*r_patchStitching;
 
 // Vulkan
 extern cvar_t	*r_defaultImage;
@@ -2073,7 +2085,6 @@ CURVE TESSELATION
 
 ============================================================
 */
-#define PATCH_STITCHING
 
 srfGridMesh_t	*R_SubdividePatchToGrid( int width, int height, drawVert_t points[MAX_PATCH_SIZE * MAX_PATCH_SIZE] );
 srfGridMesh_t	*R_GridInsertColumn( srfGridMesh_t *grid, int column, int row, vec3_t point, float loderror );
@@ -2348,7 +2359,6 @@ typedef struct backEndData_s {
 	dlight_t			dlights[MAX_DLIGHTS];
 #endif
 	trRefEntity_t		entities[MAX_REFENTITIES];
-	trMiniRefEntity_t	miniEntities[MAX_MINI_ENTITIES];
 	srfPoly_t			*polys;//[MAX_POLYS];
 	polyVert_t			*polyVerts;//[MAX_POLYVERTS];
 	renderCommandList_t	commands;
@@ -2360,7 +2370,6 @@ extern int max_polyverts;
 extern backEndData_t *backEndData;
 
 void *R_GetCommandBuffer( int bytes );
-void RB_ExecuteRenderCommands( const void *data );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 
